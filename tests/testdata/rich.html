@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Rich Test Page</title>
+<meta name="description" content="A rich test page">
+<meta property="og:title" content="OG Title">
+<link rel="alternate" type="application/rss+xml" title="RSS Feed" href="/feed.xml">
+<link rel="sitemap" href="/sitemap.xml">
+<script type="application/ld+json">{"@type":"Product","name":"Widget"}</script>
+<script type="application/json">{"appConfig":{"theme":"dark"}}</script>
+</head>
+<body>
+  <h1>Welcome</h1>
+  <p>Contact us: support@example.com or call 138-0013-8000</p>
+
+  <table id="t">
+    <thead><tr><th>Name</th><th>Qty</th></tr></thead>
+    <tbody>
+      <tr><td>Apple</td><td>1</td></tr>
+      <tr><td>Banana</td><td>2</td></tr>
+    </tbody>
+  </table>
+
+  <div class="items">
+    <div class="item">
+      <h3 class="title">Item One</h3>
+      <a class="link" href="/one">One</a>
+      <img class="pic" src="/img1.png" alt="img one">
+      <span class="price">11</span>
+    </div>
+    <div class="item">
+      <h3 class="title">Item Two</h3>
+      <a class="link" href="/two">Two</a>
+      <img class="pic" src="/img2.png" alt="img two">
+      <span class="price">22</span>
+    </div>
+  </div>
+
+  <ul class="list"><li>alpha</li><li>beta</li><li>gamma</li></ul>
+
+  <a href="https://example.com/ext">External Link</a>
+  <a href="/sitemap.xml">Sitemap link</a>
+
+  <form action="/submit" method="post">
+    <input type="text" name="username" value="joe">
+    <input type="password" name="pass">
+    <select name="role"><option>admin</option></select>
+  </form>
+
+  <video><source src="/movie.mp4"></video>
+  <iframe src="/frame.html"></iframe>
+
+  <div class="modal" id="welcome-modal" style="display:block;width:320px;height:120px">
+    <div class="modal-content">
+      <p>Welcome popup!</p>
+      <button class="close">×</button>
+    </div>
+  </div>
+</body>
+</html>

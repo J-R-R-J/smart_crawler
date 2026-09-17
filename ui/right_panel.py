@@ -1,0 +1,200 @@
+# -*- coding: utf-8 -*-
+"""右侧结果面板：数据 / JSON / Cookie / 日志 / 任务 五个 Tab。"""
+
+import json
+import os
+import time
+from typing import Any, Dict, List, Optional
+
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QFont
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QTabWidget, QTableWidget,
+    QTableWidgetItem, QHeaderView, QAbstractItemView, QPlainTextEdit,
+    QPushButton, QLabel, QFileDialog, QMessageBox,
+)
+
+from config.constants import EXPORT_DIR, LOG_DIR
+from utils.exporters import export_csv, export_json
+
+from .cookie_panel import CookiePanel
+
+
+class RightPanel(QWidget):
+    def __init__(self, prefs, parent=None):
+        super().__init__(parent)
+        self.prefs = prefs
+        self.rows: List[Dict[str, Any]] = []
+        self.columns: List[str] = []
+        self._build()
+
+    # ==================================================================
+    # UI
+    # ==================================================================
+    def _build(self):
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(6, 0, 0, 0)
+
+        self.tabs = QTabWidget()
+
+        # --- 1. 数据 ---
+        self.table = QTableWidget(0, 0)
+        self.table.setAlternatingRowColors(True)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Interactive)
+        self.tabs.addTab(self.table, "数据")
+
+        # --- 2. JSON ---
+        self.json_view = QPlainTextEdit()
+        self.json_view.setReadOnly(True)
+        self.json_view.setFont(QFont("Consolas", 9))
+        self.tabs.addTab(self.json_view, "JSON")
+
+        # --- 3. Cookie ---
+        self.cookie_panel = CookiePanel(self.prefs)
+        self.tabs.addTab(self.cookie_panel, "Cookie")
+
+        # --- 4. 日志 ---
+        self.log_view = QPlainTextEdit()
+        self.log_view.setReadOnly(True)
+        self.log_view.setFont(QFont("Consolas", 9))
+        self.tabs.addTab(self.log_view, "日志")
+
+        # --- 5. 任务 ---
+        self.task_view = QPlainTextEdit()
+        self.task_view.setReadOnly(True)
+        self.task_view.setFont(QFont("Consolas", 9))
+        self.tabs.addTab(self.task_view, "任务")
+
+        lay.addWidget(self.tabs, 1)
+
+        # ---------- 底部工具条 ----------
+        bottom = QHBoxLayout()
+
+        self.count_label = QLabel("0 条")
+        self.count_label.setObjectName("countLabel")
+
+        self.btn_open_log_dir = QPushButton("打开日志目录")
+        self.btn_clear        = QPushButton("清空结果")
+        self.btn_export_csv   = QPushButton("导出 CSV")
+        self.btn_export_json  = QPushButton("导出 JSON")
+
+        bottom.addWidget(self.count_label, 1)
+        bottom.addWidget(self.btn_open_log_dir)
+        bottom.addWidget(self.btn_clear)
+        bottom.addWidget(self.btn_export_csv)
+        bottom.addWidget(self.btn_export_json)
+        lay.addLayout(bottom)
+
+        # 信号
+        self.btn_clear.clicked.connect(self.clear)
+        self.btn_export_csv.clicked.connect(lambda: self.export("csv"))
+        self.btn_export_json.clicked.connect(lambda: self.export("json"))
+        self.btn_open_log_dir.clicked.connect(self._open_log_dir)
+
+    # ==================================================================
+    # 数据
+    # ==================================================================
+    def append_rows(self, rows: List[Dict[str, Any]]):
+        if not rows:
+            return
+
+        new_cols = []
+        for r in rows:
+            for k in r.keys():
+                if k not in self.columns and k not in new_cols:
+                    new_cols.append(k)
+        if new_cols:
+            self.columns.extend(new_cols)
+            self.table.setColumnCount(len(self.columns))
+            self.table.setHorizontalHeaderLabels(self.columns)
+
+        for r in rows:
+            i = self.table.rowCount()
+            self.table.insertRow(i)
+            for c, col in enumerate(self.columns):
+                v = r.get(col, "")
+                if not isinstance(v, str):
+                    try:
+                        v = json.dumps(v, ensure_ascii=False)
+                    except Exception:
+                        v = str(v)
+                self.table.setItem(i, c, QTableWidgetItem(v))
+
+        self.rows.extend(rows)
+        self.count_label.setText(f"{len(self.rows)} 条")
+
+        # JSON 预览
+        preview = self.rows[-200:]
+        try:
+            self.json_view.setPlainText(
+                json.dumps(preview, ensure_ascii=False, indent=2))
+        except Exception as e:
+            self.json_view.setPlainText(f"(JSON 序列化失败：{e})")
+
+        # 首次自动调整列宽
+        if self.table.rowCount() == len(rows):
+            self.table.resizeColumnsToContents()
+            for c in range(self.table.columnCount()):
+                if self.table.columnWidth(c) > 320:
+                    self.table.setColumnWidth(c, 320)
+
+    def clear(self):
+        self.table.setRowCount(0)
+        self.table.setColumnCount(0)
+        self.columns = []
+        self.rows = []
+        self.json_view.clear()
+        self.count_label.setText("0 条")
+
+    # ==================================================================
+    # 日志
+    # ==================================================================
+    def log(self, level: str, msg: str):
+        ts = time.strftime("%H:%M:%S")
+        line = f"[{ts}] [{level}] {msg}"
+        self.log_view.appendPlainText(line)
+        sb = self.log_view.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def set_task_summary(self, text: str):
+        self.task_view.setPlainText(text)
+
+    # ==================================================================
+    # 导出
+    # ==================================================================
+    def export(self, fmt: str):
+        if not self.rows:
+            QMessageBox.information(self, "提示", "当前没有可导出的数据。")
+            return
+
+        default = os.path.join(
+            EXPORT_DIR,
+            f"result_{time.strftime('%Y%m%d_%H%M%S')}.{fmt}")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "导出结果", default,
+            "CSV 文件 (*.csv)" if fmt == "csv" else "JSON 文件 (*.json)")
+        if not path:
+            return
+        try:
+            if fmt == "csv":
+                export_csv(self.rows, self.columns, path)
+            else:
+                export_json(self.rows, path)
+            QMessageBox.information(self, "导出成功", f"已保存到：\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "导出失败", str(e))
+
+    # ==================================================================
+    # 打开日志目录
+    # ==================================================================
+    def _open_log_dir(self):
+        try:
+            if os.name == "nt":
+                os.startfile(LOG_DIR)   # type: ignore[attr-defined]
+            else:
+                import subprocess
+                subprocess.Popen(["xdg-open", LOG_DIR])
+        except Exception as e:
+            QMessageBox.warning(self, "无法打开", str(e))

@@ -1,0 +1,24 @@
+# -*- coding: utf-8 -*-
+"""config 包：全局常量、默认设置与内置 JS 脚本。"""
+from config import constants
+from config.constants import (
+    APP_TITLE, APP_VERSION, BASE_DIR, COOKIE_DIR, DATA_DIR,
+    DEFAULT_PROFILE, EXPORT_DIR, LOG_DIR, PROFILE_DIR,
+)
+from config.default_settings import (
+    CAPTCHA_KEYWORDS, DEFAULT_POPUP_STRATEGY, DETECT_INTERVAL_MS,
+    HUMAN_VERIFY_KEYWORDS, LOGIN_KEYWORDS, MAX_POPUP_ROUNDS,
+    POPUP_CLOSE_SELECTORS, POPUP_HINT_KEYWORDS, POPUP_STRATEGIES,
+    SUPPORTED_FORMATS,
+)
+from config.js_scripts import build_extract_js
+
+__all__ = [
+    "constants",
+    "APP_TITLE", "APP_VERSION", "BASE_DIR", "COOKIE_DIR", "DATA_DIR",
+    "DEFAULT_PROFILE", "EXPORT_DIR", "LOG_DIR", "PROFILE_DIR",
+    "CAPTCHA_KEYWORDS", "DEFAULT_POPUP_STRATEGY", "DETECT_INTERVAL_MS",
+    "HUMAN_VERIFY_KEYWORDS", "LOGIN_KEYWORDS", "MAX_POPUP_ROUNDS",
+    "POPUP_CLOSE_SELECTORS", "POPUP_HINT_KEYWORDS", "POPUP_STRATEGIES",
+    "SUPPORTED_FORMATS", "build_extract_js",
+]

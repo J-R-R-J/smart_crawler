@@ -1,0 +1,10 @@
+# SmartCrawler 依赖
+# ---------------------------------------------------
+# 唯一必需依赖：PySide6 已包含 QtWidgets / QtWebEngine / QtNetwork
+PySide6>=6.6.0
+
+# 说明：
+#   · QWebEngine 从 6.6 起自带 Chromium 124+
+#   · 若 pip 安装体积过大，可用：
+#       pip install PySide6-Essentials PySide6-Addons
+#     并确保 Addons 包含 QtWebEngineCore / QtWebEngineWidgets

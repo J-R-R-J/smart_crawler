@@ -1,0 +1,46 @@
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# ---------- 虚拟环境 ----------
+.venv/
+venv/
+env/
+ENV/
+
+# ---------- 运行时数据（本地生成，不纳入版本控制） ----------
+crawler_data/
+crawler_data/**
+!crawler_data/.gitkeep
+
+# ---------- 临时文件 / 日志 ----------
+.tmp/
+.tmp*/
+.wheels*/
+*.part
+*.log
+*.tmp
+
+# ---------- 抓取结果 ----------
+*.csv
+*.xlsx
+!tests/testdata/*.csv
+
+# ---------- 编辑器 / 系统 ----------
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ---------- 打包 ----------
+*.spec
