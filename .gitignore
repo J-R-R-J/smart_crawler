@@ -27,8 +27,23 @@ crawler_data/**
 *.part
 *.log
 *.tmp
+*.pid
+
+# ---------- 打包暂存 / 临时导出（本地打包时使用，不提交） ----------
+.pkg/
+.export-tmp/
+.export/
+release/
+
+# ---------- 合并 / 备份残留 ----------
+*.orig
+*.rej
+*.bak
+*.old
+*~
 
 # ---------- 抓取结果 ----------
+# 抓取产出的表格不提交；tests/testdata 下的固定测试数据除外
 *.csv
 *.xlsx
 !tests/testdata/*.csv
@@ -38,14 +53,21 @@ crawler_data/**
 .vscode/
 *.swp
 *.swo
-*~
 .DS_Store
 Thumbs.db
+desktop.ini
 
 # ---------- 打包 / 发布产物 ----------
 *.spec
-# 发布用的压缩包只作为 Release 附件上传，不进入仓库
+# 发布用压缩包只作为 Release 附件上传，不进入仓库
 *.zip
 *.tar.gz
 *.7z
 smart_crawler-v*.zip
+
+# ---------- AI 协作文档（仅本地保留，不随仓库分发） ----------
+# ReadByAI.txt 是给本机 AI 助手看的项目交接文档，记录了内部工作过程、
+# 环境细节与本地路径等信息，**不纳入版本控制**。
+# 若需要向其他协作者说明项目，请把内容整理进 README.md 或 CHANGELOG.md。
+ReadByAI.txt
+ReadByAI*.txt
