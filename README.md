@@ -5,6 +5,7 @@
 ![PySide6](https://img.shields.io/badge/PySide6-6.6%2B-green)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)
+[![Release](https://img.shields.io/github/v/release/J-R-R-J/smart_crawler?label=release)](https://github.com/J-R-R-J/smart_crawler/releases/latest)
 
 一个基于 **PySide6 + QtWebEngine** 的桌面爬虫工具：把浏览器内核嵌进界面，所见即所抓；
 遇到验证码、人机校验、登录墙或弹窗时自动暂停，把页面交给人处理，处理完自动继续抓取。
@@ -19,6 +20,7 @@
 
 ## 目录
 
+- [下载](#下载)
 - [主要特性](#主要特性)
 - [环境要求](#环境要求)
 - [安装](#安装)
@@ -38,6 +40,38 @@
 - [已知限制](#已知限制)
 - [版本与更新日志](#版本与更新日志)
 - [许可与免责声明](#许可与免责声明)
+
+---
+
+## 下载
+
+### 方式一：下载发布压缩包（推荐）
+
+前往 **[Releases 页面](https://github.com/J-R-R-J/smart_crawler/releases/latest)**，
+在 **Assets** 区域下载 `smart_crawler-v0.0.2.zip`：
+
+| 项目 | 说明 |
+| --- | --- |
+| 文件名 | `smart_crawler-v0.0.2.zip` |
+| 大小 | 约 160 KB |
+| 内容 | 完整源码（配置 / 核心 / 界面 / 工具 / 测试 / 文档），**不含**虚拟环境与运行时数据 |
+
+解压后直接进入「[安装](#安装)」章节装依赖即可。
+
+### 方式二：克隆仓库
+
+```bash
+git clone https://github.com/J-R-R-J/smart_crawler.git
+cd smart_crawler
+```
+
+### 方式三：下载源码包
+
+在 [Releases 页面](https://github.com/J-R-R-J/smart_crawler/releases/latest) 的
+**Source code** 区域可选择 `zip` 或 `tar.gz`（由 GitHub 自动生成，
+不包含 Release 附件中的额外说明文件）。
+
+> 无论哪种方式，都需要本机已安装 **Python 3.10+**，并按「安装」章节安装 PySide6 依赖。
 
 ---
 
@@ -79,6 +113,9 @@
 
 ## 安装
 
+前置步骤：按「[下载](#下载)」章节拿到源码（解压压缩包或 `git clone`），
+然后用以下任一方式安装依赖。
+
 ### 方式一：pip 安装依赖
 
 ```bash
@@ -99,6 +136,18 @@ pip install PySide6
 启动脚本会自动检测虚拟环境、检查依赖并在缺失时安装。
 
 > 若项目目录下存在 `.venv`，`run.bat` / `run.sh` 会优先使用它。
+
+### 方式四：使用独立虚拟环境（推荐）
+
+避免与系统 Python 包冲突：
+
+```bash
+python -m venv .venv
+# Windows
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+# Linux / macOS
+.venv/bin/python -m pip install -r requirements.txt
+```
 
 ---
 

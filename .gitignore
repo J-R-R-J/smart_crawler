@@ -42,5 +42,10 @@ crawler_data/**
 .DS_Store
 Thumbs.db
 
-# ---------- 打包 ----------
+# ---------- 打包 / 发布产物 ----------
 *.spec
+# 发布用的压缩包只作为 Release 附件上传，不进入仓库
+*.zip
+*.tar.gz
+*.7z
+smart_crawler-v*.zip
