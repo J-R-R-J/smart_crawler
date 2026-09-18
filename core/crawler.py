@@ -9,12 +9,17 @@ autoscroll → extract → delay → 翻页循环（next_selector + max_pages，
 所有 UI 事件经 get_signals() 总线 emit；文件日志经 utils.logger。
 """
 
+import json
+import random
 import time
 
 from PySide6.QtCore import QObject, QTimer
 
 from config.default_settings import DETECT_INTERVAL_MS
-from config.js_scripts import GET_HTML_JS, GET_TITLE_JS, SCROLL_JS
+from config.js_scripts import (
+    CAPTCHA_PROBE_JS, GET_HTML_JS, GET_TEXT_JS, GET_TITLE_JS,
+    LOGIN_PROBE_JS, SCROLL_JS,
+)
 from core.detector import Detector
 from core.extractor import Extractor
 from core.pager import Pager
@@ -48,6 +53,7 @@ class Crawler(QObject):
         self._start_time = 0.0
         self._awaiting_load = False
         self._poll_timer = None
+        self._skip_detection = False   # 用户判定误判后，本任务内不再因验证暂停
 
         # ---- 组件组装 ----
         self.detector = Detector(self)
@@ -80,6 +86,7 @@ class Crawler(QObject):
         self._start_time = time.time()
         self._awaiting_load = False
         self._poll_timer = None
+        self._skip_detection = False   # 新任务重新启用检测
 
         self._signals.task_started.emit()
         self._signals.log.emit("INFO", f"任务启动：{task.url}")
@@ -102,20 +109,38 @@ class Crawler(QObject):
         if self._state in ("IDLE", "STOPPED"):
             return
         self._cancel = True
+        self._stop_poll_timer()
         self._set_state("STOPPED")
         log_info("[crawler] 任务已被手动停止")
+        self._signals.log.emit("WARN", "任务已被手动停止")
+
+        # 必须发 task_finished：UI 依赖它复位「开始抓取」按钮并显示汇总，
+        # 否则停止后按钮会一直处于禁用状态。
+        elapsed = max(0.0, time.time() - self._start_time) if self._start_time else 0.0
+        self._signals.task_finished.emit(self._records.count(), elapsed)
 
     def on_human_done(self) -> None:
         """人类处理完成：取消挂起的轮询定时器并立即轮询一次。"""
         if self._state != "HUMAN_WAIT":
             return
-        if self._poll_timer is not None:
-            try:
-                self._poll_timer.stop()
-            except Exception:
-                pass
-            self._poll_timer = None
+        self._stop_poll_timer()
         self._poll_human()
+
+    def skip_human(self) -> None:
+        """误判跳过：立即继续，并在本任务内不再因验证暂停。
+
+        用于关键词命中但页面并不存在验证组件的误判场景。
+        任务重新开始时会恢复检测。
+        """
+        if self._state != "HUMAN_WAIT":
+            return
+        self._stop_poll_timer()
+        self._skip_detection = True
+        msg = "已跳过验证检测（判定为误判），本任务内不再因验证暂停"
+        log_warn(f"[crawler] {msg}")
+        self._signals.log.emit("WARN", msg)
+        self._signals.human_cleared.emit()
+        self._continue_after_load()
 
     # ==================================================================
     # 状态机内部
@@ -162,9 +187,19 @@ class Crawler(QObject):
         self.popup_handler.set_strategy(self._browser.popup_strategy)
         self.popup_handler.handle_all()
 
+        if self._skip_detection:
+            # 用户已判定为误判：本任务内不再因验证暂停
+            self._continue_after_load()
+            return
+
         html = self._get_html()
         title = self._get_title()
-        level, reason = self.detector.classify(html, title, self._browser.url())
+        text = self._get_text()
+        level, reason = self.detector.classify(
+            html, title, self._browser.url(), text,
+            captcha_forms=self._probe_captcha(),
+            login_form=self._probe_login(),
+        )
         self.detector.detected.emit(level, reason)
 
         if level in _BLOCKING:
@@ -183,8 +218,12 @@ class Crawler(QObject):
         if self._cancel or self._state != "HUMAN_WAIT":
             self._poll_timer = None
             return
-        level, _ = self.detector.classify(self._get_html(), self._get_title(),
-                                          self._browser.url())
+        level, _ = self.detector.classify(
+            self._get_html(), self._get_title(), self._browser.url(),
+            self._get_text(),
+            captcha_forms=self._probe_captcha(),
+            login_form=self._probe_login(),
+        )
         if level == "NONE":
             self._poll_timer = None
             log_info("[crawler] 人工验证已通过，继续任务")
@@ -226,6 +265,9 @@ class Crawler(QObject):
             delay_ms = int(max(0.0, float(self._task.delay or 0)) * 1000)
         except (TypeError, ValueError):
             delay_ms = 1500
+        # 拟人化抖动：固定间隔是最容易被识别的自动化特征之一，±30% 随机化
+        if delay_ms > 0 and self._browser.stealth_enabled:
+            delay_ms = int(delay_ms * random.uniform(0.7, 1.3))
         QTimer.singleShot(delay_ms, self._after_extract_delay)
 
     def _after_extract_delay(self) -> None:
@@ -281,6 +323,14 @@ class Crawler(QObject):
         self._state = state
         self._signals.state_changed.emit(state)
 
+    def _stop_poll_timer(self) -> None:
+        if self._poll_timer is not None:
+            try:
+                self._poll_timer.stop()
+            except Exception:
+                pass
+            self._poll_timer = None
+
     # ==================================================================
     # 小工具
     # ==================================================================
@@ -291,9 +341,47 @@ class Crawler(QObject):
             value = None
         return value if isinstance(value, str) else ""
 
+    def _get_text(self) -> str:
+        """渲染后的可见纯文本。
+
+        部分反爬页面把关键词用实体编码、零宽字符或 CSS 内容伪装，
+        outerHTML 里看不到，但 innerText 里是明文，因此检测需要同时取二者。
+        """
+        try:
+            value = self._browser.js.run_sync(GET_TEXT_JS, 8000)
+        except Exception:
+            value = None
+        return value if isinstance(value, str) else ""
+
     def _get_title(self) -> str:
         try:
             value = self._browser.js.run_sync(GET_TITLE_JS, 8000)
         except Exception:
             value = None
         return value if isinstance(value, str) else ""
+
+    def _run_probe(self, js_code: str) -> dict:
+        """执行结构化探测脚本并解析 JSON；失败返回空 dict。"""
+        try:
+            raw = self._browser.js.run_sync(js_code, 6000)
+        except Exception:
+            return {}
+        if isinstance(raw, str):
+            s = raw.strip()
+            if not s:
+                return {}
+            try:
+                data = json.loads(s)
+            except (ValueError, TypeError):
+                return {}
+        else:
+            data = raw
+        return data if isinstance(data, dict) else {}
+
+    def _probe_captcha(self) -> dict:
+        """探测页面是否存在真正的验证码组件（输入框 / iframe / 容器 / 图形码）。"""
+        return self._run_probe(CAPTCHA_PROBE_JS)
+
+    def _probe_login(self) -> dict:
+        """探测页面是否存在登录表单（密码输入框等）。"""
+        return self._run_probe(LOGIN_PROBE_JS)

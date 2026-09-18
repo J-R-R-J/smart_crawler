@@ -69,6 +69,15 @@ def main():
     win = MainWindow()
     win.show()
 
+    # ---- 退出时确保按顺序销毁引擎（page 先于 profile） ----
+    def _cleanup():
+        try:
+            win.close()
+        except Exception:
+            pass
+
+    app.aboutToQuit.connect(_cleanup)
+
     sys.exit(app.exec())
 
 

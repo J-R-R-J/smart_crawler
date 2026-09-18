@@ -81,7 +81,8 @@ class TopBar(QWidget):
         url = self.url_edit.text().strip()
         if not url:
             return
-        if not url.lower().startswith(("http://", "https://")):
+        # 仅在完全没有协议头时补全 https://，避免破坏 file:// 等其它协议
+        if "://" not in url:
             url = "https://" + url
             self.url_edit.setText(url)
         self.go_requested.emit(url)

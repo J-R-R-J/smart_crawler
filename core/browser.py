@@ -14,13 +14,15 @@ import os
 import re
 import shutil
 
-from PySide6.QtCore import QObject, QUrl, Signal, Slot
+from PySide6.QtCore import QCoreApplication, QEvent, QObject, QUrl, Signal, Slot
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineScript
 
-from config.constants import DATA_DIR, PROFILE_DIR
+from config.constants import DATA_DIR, DOWNLOAD_DIR, PROFILE_DIR
+from config.js_scripts import STEALTH_JS
 from core.signals import get_signals
 from utils.js_runner import JsRunner
+from utils.logger import log_info, log_warn
 
 
 class JsBridge(QObject):
@@ -79,10 +81,14 @@ class Browser(QObject):
     url_changed = Signal(str)
     page_replaced = Signal()      # page 对象被替换（Profile 切换）
 
-    def __init__(self, profile_name: str = "default", popup_strategy: str = "close"):
+    def __init__(self, profile_name: str = "default", popup_strategy: str = "close",
+                 stealth_enabled: bool = True, max_download_mb: int = 50):
         super().__init__()
         self._profile_name = profile_name
         self._popup_strategy = popup_strategy
+        self._stealth_enabled = bool(stealth_enabled)
+        self._max_download_mb = max(0, int(max_download_mb or 0))
+        self._downloads = []      # 保活：进行中的下载对象
         self._old_refs = []       # 保留旧 page/profile/channel/bridge 引用直至销毁
 
         self._profile = self._create_profile()
@@ -97,6 +103,16 @@ class Browser(QObject):
         self._install_channel_script()
         # 当前已存在的文档（如 about:blank）也立即补一次加载器
         self._js.run(QWEBCHANNEL_LOADER_JS)
+
+        # ---- 反爬特征伪装 ----
+        if self._stealth_enabled:
+            self._install_stealth_script()
+
+        # ---- 下载大小限制 ----
+        try:
+            self._profile.downloadRequested.connect(self._on_download_requested)
+        except Exception:
+            pass
 
         self._page.urlChanged.connect(lambda u: self.url_changed.emit(u.toString()))
 
@@ -136,7 +152,36 @@ class Browser(QObject):
         return self._popup_strategy
 
     # --------------------------------------------------------------
+    # 反爬伪装 / 下载限制
+    # --------------------------------------------------------------
+    @property
+    def stealth_enabled(self) -> bool:
+        return self._stealth_enabled
+
+    @stealth_enabled.setter
+    def stealth_enabled(self, value: bool) -> None:
+        self._stealth_enabled = bool(value)
+        if self._stealth_enabled:
+            self._install_stealth_script()
+        else:
+            self._remove_stealth_script()
+
+    @property
+    def max_download_mb(self) -> int:
+        return self._max_download_mb
+
+    @max_download_mb.setter
+    def max_download_mb(self, value) -> None:
+        try:
+            self._max_download_mb = max(0, int(value))
+        except (TypeError, ValueError):
+            self._max_download_mb = 0
+
+    # --------------------------------------------------------------
     # 导航
+    #
+    # 注意：Qt6 起 QWebEnginePage 不再提供 back()/forward()/reload()/stop()，
+    # 这些动作统一通过 triggerAction(WebAction) 执行（或 QWebEngineHistory）。
     # --------------------------------------------------------------
     def navigate(self, url: str) -> None:
         self._page.load(QUrl(url))
@@ -145,13 +190,22 @@ class Browser(QObject):
         return self._page.url().toString()
 
     def back(self) -> None:
-        self._page.back()
+        self._page.triggerAction(QWebEnginePage.WebAction.Back)
 
     def forward(self) -> None:
-        self._page.forward()
+        self._page.triggerAction(QWebEnginePage.WebAction.Forward)
 
     def reload(self) -> None:
-        self._page.reload()
+        self._page.triggerAction(QWebEnginePage.WebAction.Reload)
+
+    def stop(self) -> None:
+        self._page.triggerAction(QWebEnginePage.WebAction.Stop)
+
+    def can_go_back(self) -> bool:
+        return self._page.history().canGoBack()
+
+    def can_go_forward(self) -> bool:
+        return self._page.history().canGoForward()
 
     def set_popup_strategy(self, key: str) -> None:
         if key in ("notify", "close", "remove"):
@@ -176,9 +230,36 @@ class Browser(QObject):
             pass
 
     def close(self) -> None:
+        """按正确顺序销毁：先 page，后 profile。
+
+        QtWebEngine 要求 profile 销毁时不能还有存活的 page，否则会打印
+        「Release of profile requested but WebEnginePage still not deleted」
+        并在退出阶段崩溃。deleteLater 是异步的，因此这里强制派发一次
+        DeferredDelete 事件，确保 page 真正先于 profile 被销毁。
+        """
+        page, profile = self._page, self._profile
         try:
-            self._page.deleteLater()
-            self._profile.deleteLater()
+            # 断开信号，避免销毁过程中回调到已失效对象
+            try:
+                page.loadFinished.disconnect()
+            except Exception:
+                pass
+            try:
+                page.urlChanged.disconnect()
+            except Exception:
+                pass
+            try:
+                page.setParent(None)
+            except Exception:
+                pass
+            page.deleteLater()
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        except Exception:
+            pass
+
+        try:
+            profile.deleteLater()
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         except Exception:
             pass
 
@@ -206,6 +287,109 @@ class Browser(QObject):
         script.setWorldId(QWebEngineScript.ScriptWorldId.MainWorld)
         script.setSourceCode(QWEBCHANNEL_LOADER_JS)
         self._page.scripts().insert(script)
+
+    def _find_script(self, name: str):
+        try:
+            scripts = self._page.scripts()
+        except Exception:
+            return None
+        for s in scripts.find(name):
+            return s
+        return None
+
+    def _install_stealth_script(self) -> None:
+        """注入反爬特征伪装脚本（DocumentCreation，早于页面脚本）。"""
+        try:
+            if self._find_script("sc_stealth") is not None:
+                return
+            script = QWebEngineScript()
+            script.setName("sc_stealth")
+            script.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentCreation)
+            script.setWorldId(QWebEngineScript.ScriptWorldId.MainWorld)
+            script.setSourceCode(STEALTH_JS)
+            self._page.scripts().insert(script)
+            log_info("[stealth] 已启用浏览器特征伪装")
+        except Exception as e:
+            log_warn(f"[stealth] 注入失败：{e}")
+
+    def _remove_stealth_script(self) -> None:
+        try:
+            script = self._find_script("sc_stealth")
+            if script is not None:
+                self._page.scripts().remove(script)
+                log_info("[stealth] 已关闭浏览器特征伪装")
+        except Exception as e:
+            log_warn(f"[stealth] 移除失败：{e}")
+
+    # --------------------------------------------------------------
+    # 下载：大小限制 + 归档到 crawler_data/downloads
+    # --------------------------------------------------------------
+    def _on_download_requested(self, download) -> None:
+        try:
+            name = (download.suggestedFileName()
+                    or download.downloadFileName() or "download.bin")
+            limit_bytes = self._max_download_mb * 1024 * 1024
+            total = int(download.totalBytes() or 0)
+
+            if limit_bytes and total > limit_bytes:
+                log_warn(f"[download] 已拒绝 {name}："
+                         f"{total / 1048576:.1f} MB 超过限制 "
+                         f"{self._max_download_mb} MB")
+                self._signals_log("WARN", f"下载被拒绝（超出大小限制）：{name}")
+                download.cancel()
+                return
+
+            os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+            download.setDownloadDirectory(DOWNLOAD_DIR)
+            download.setDownloadFileName(name)
+
+            # 服务器未返回总大小时，按已接收字节中途拦截
+            if limit_bytes:
+                def _check(received, dl=download, limit=limit_bytes, fname=name):
+                    try:
+                        if int(received or 0) > limit:
+                            dl.cancel()
+                            log_warn(f"[download] {fname} 超过 "
+                                     f"{self._max_download_mb} MB，已中断")
+                    except Exception:
+                        pass
+
+                download.receivedBytesChanged.connect(
+                    lambda dl=download: _check(dl.receivedBytes()))
+
+            self._downloads.append(download)
+            download.stateChanged.connect(
+                lambda st, dl=download: self._on_download_state(dl, name))
+            download.accept()
+            log_info(f"[download] 开始下载：{name} → {DOWNLOAD_DIR}")
+            self._signals_log("INFO", f"开始下载：{name}")
+        except Exception as e:
+            log_warn(f"[download] 处理下载请求失败：{e}")
+
+    def _on_download_state(self, download, name: str) -> None:
+        try:
+            state = download.state()
+            if state in (download.DownloadState.DownloadCompleted,
+                         download.DownloadState.DownloadCancelled,
+                         download.DownloadState.DownloadInterrupted):
+                try:
+                    self._downloads.remove(download)
+                except ValueError:
+                    pass
+            if state == download.DownloadState.DownloadCompleted:
+                log_info(f"[download] 完成：{name}")
+                self._signals_log("INFO", f"下载完成：{name}")
+            elif state == download.DownloadState.DownloadInterrupted:
+                log_warn(f"[download] 中断：{name}")
+        except Exception:
+            pass
+
+    @staticmethod
+    def _signals_log(level: str, msg: str) -> None:
+        try:
+            get_signals().log.emit(level, msg)
+        except Exception:
+            pass
 
 
 # ==================================================================

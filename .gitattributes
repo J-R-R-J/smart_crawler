@@ -1,0 +1,25 @@
+# 统一换行符为 LF 存入仓库，检出时按平台处理
+* text=auto eol=lf
+
+# Windows 批处理必须保持 CRLF，否则可能无法执行
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Shell 脚本保持 LF
+*.sh text eol=lf
+
+# 二进制文件不做换行转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.xlsx binary
+*.zip binary
+*.whl binary
+
+# 抓取数据 / 配置文件的换行不做强制
+*.json text
+*.ini text
+*.qss text

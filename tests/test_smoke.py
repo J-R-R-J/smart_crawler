@@ -89,10 +89,23 @@ def main():
     sig = get_signals()
     check("signals singleton", get_signals() is sig)
 
-    from core.user_prefs import UserPrefs
+    from core.user_prefs import UserPrefs, SETTINGS_PATH
     p = UserPrefs()
-    check("user_prefs defaults", p.last_mode == "records" and p.popup_strategy in
-          ("notify", "close", "remove"))
+    check("user_prefs api", isinstance(p.last_modes, list)
+          and isinstance(p.last_delay, float)
+          and p.popup_strategy in ("notify", "close", "remove")
+          and isinstance(p.max_download_mb, int)
+          and isinstance(p.stealth_enabled, bool)
+          and isinstance(p.export_dir, str),
+          f"modes={p.last_modes} delay={p.last_delay} "
+          f"limit={p.max_download_mb} stealth={p.stealth_enabled}")
+    check("user_prefs uses ini file", SETTINGS_PATH.endswith("settings.ini"),
+          SETTINGS_PATH)
+    p.stealth_enabled = True
+    p.max_download_mb = 50
+    check("user_prefs write/read",
+          p.stealth_enabled is True and p.max_download_mb == 50,
+          f"stealth={p.stealth_enabled} limit={p.max_download_mb}")
 
     from core.browser import list_profiles, profile_dir
     check("list_profiles", "default" in list_profiles(), str(list_profiles()))

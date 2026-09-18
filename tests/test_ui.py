@@ -1,0 +1,422 @@
+# -*- coding: utf-8 -*-
+"""UI 交互测试：按钮点击、导航历史、各面板操作、全局信号槽（无头模式）。
+
+覆盖 test_smoke / test_e2e / test_feature 未触及的界面动作路径，
+例如「后退 / 前进 / 刷新」这类直接映射到 Qt API 的按钮。
+"""
+import os
+import sys
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS",
+                      "--no-sandbox --disable-gpu --single-process")
+
+HERE = os.path.dirname(os.path.abspath(__file__))   # tests/
+ROOT = os.path.dirname(HERE)                        # 项目根目录
+TESTDATA = os.path.join(HERE, "testdata")
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+PASS = []
+FAIL = []
+
+
+def check(name, cond, extra=""):
+    (PASS if cond else FAIL).append(name)
+    print(f"[{'PASS' if cond else 'FAIL'}] {name} {extra}", flush=True)
+
+
+def spin(ms):
+    from PySide6.QtCore import QEventLoop, QTimer
+    loop = QEventLoop()
+    QTimer.singleShot(ms, loop.quit)
+    loop.exec()
+
+
+def file_url(name):
+    return "file:///" + os.path.join(TESTDATA, name).replace("\\", "/")
+
+
+def main():
+    from PySide6.QtCore import QEventLoop, QTimer
+    from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QInputDialog, QDialog
+
+    app = QApplication(sys.argv)
+    app.setApplicationName("SmartCrawler")
+    app.setOrganizationName("SmartCrawler")
+
+    # ---------- 屏蔽所有阻塞式对话框 ----------
+    QMessageBox.information = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Ok)
+    QMessageBox.warning = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Ok)
+    QMessageBox.critical = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Ok)
+    QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)
+    QInputDialog.getText = staticmethod(lambda *a, **k: ("uitest", True))
+
+    save_paths = {"csv": os.path.join(ROOT, "crawler_data", "exports", "_ui_test.csv"),
+                  "json": os.path.join(ROOT, "crawler_data", "exports", "_ui_test.json")}
+    cookie_io = {"export": os.path.join(ROOT, "crawler_data", "cookies", "_ui_export.json"),
+                 "import": os.path.join(ROOT, "crawler_data", "cookies", "_ui_import.json")}
+
+    # 对话框返回值由测试控制（None 表示沿用调用方给的默认路径）
+    dialog = {"save": None, "open": None}
+    QFileDialog.getSaveFileName = staticmethod(
+        lambda parent=None, title="", d="", filt="": (dialog["save"] or d, filt))
+    QFileDialog.getOpenFileName = staticmethod(
+        lambda parent=None, title="", d="", filt="": (dialog["open"] or d, filt))
+
+    # 替换「编辑 Cookie」对话框，避免 exec() 阻塞
+    import ui.cookie_panel as cp
+
+    class FakeCookieDialog:
+        def __init__(self, *a, **k):
+            pass
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+        def get_data(self):
+            return {"name": "ui_ck", "value": "uival", "domain": "example.com",
+                    "path": "/", "secure": False, "http_only": False}
+
+    cp.CookieEditDialog = FakeCookieDialog
+
+    from ui.main_window import MainWindow
+    from models.field import Field
+
+    win = MainWindow()
+    browser = win.browser
+    win.show()
+    spin(1500)
+
+    # ================= 1. 顶栏与导航 =================
+    tb = win.top_bar
+    tb.set_url("https://example.com/x")
+    check("top_bar.set_url", tb.url_edit.text() == "https://example.com/x")
+
+    tb.set_popup_strategy("remove")
+    check("top_bar.set_popup_strategy", tb.popup_combo.currentData() == "remove")
+
+    tb.set_pick_active(True)
+    check("top_bar.set_pick_active", tb.btn_pick.isChecked())
+
+    # 真实导航历史：page1 -> page2 -> back -> forward -> reload
+    def load_and_wait(url):
+        loop = QEventLoop()
+        t = QTimer(); t.setSingleShot(True)
+        t.timeout.connect(loop.quit)
+        browser.page.loadFinished.connect(lambda ok: loop.quit())
+        browser.navigate(url)
+        t.start(10000)
+        loop.exec()
+        t.stop()
+        spin(150)
+
+    load_and_wait(file_url("page1.html"))
+    check("navigate page1", browser.url().endswith("page1.html"), browser.url())
+    load_and_wait(file_url("page2.html"))
+    check("navigate page2", browser.url().endswith("page2.html"), browser.url())
+
+    check("can_go_back", browser.can_go_back() is True)
+    tb.btn_back.click()
+    spin(1200)
+    check("btn_back clicked", browser.url().endswith("page1.html"), browser.url())
+
+    check("can_go_forward", browser.can_go_forward() is True)
+    tb.btn_fwd.click()
+    spin(1200)
+    check("btn_fwd clicked", browser.url().endswith("page2.html"), browser.url())
+
+    tb.btn_reload.click()
+    spin(1200)
+    check("btn_reload clicked", browser.url().endswith("page2.html"), browser.url())
+
+    tb.url_edit.setText(file_url("rich.html"))
+    got_go = []
+    tb.go_requested.connect(got_go.append)
+    tb.btn_go.click()
+    spin(1500)
+    check("btn_go emits go_requested", got_go and got_go[-1].endswith("rich.html"),
+          str(got_go))
+    check("btn_go navigates", browser.url().endswith("rich.html"), browser.url())
+
+    # ================= 2. 拾取开关 =================
+    tb.btn_pick.setChecked(True)
+    win._on_pick_toggled(True)
+    check("picker enabled", win.crawler.picker.is_active() is True)
+    win._on_pick_toggled(False)
+    check("picker disabled", win.crawler.picker.is_active() is False)
+
+    # 拾取回调（模拟页面回传）
+    win._on_picked(".title", "Item One", "h3", "")
+    check("picked applied to selector",
+          ".title" in win.left_panel.selector_edit.text(),
+          win.left_panel.selector_edit.text())
+
+    # ================= 3. 左侧面板 =================
+    lp = win.left_panel
+    lp.fields_edit.setPlainText("标题 | .title | text |\n价格 | .price | text |")
+    lp.selector_edit.setText(".item")
+    lp.set_selected_modes(["records"])           # 单格式
+    task = lp.collect_task()
+    check("collect_task single mode",
+          task.mode == "records" and task.modes == ["records"]
+          and len(task.fields) == 2,
+          f"modes={task.modes} fields={len(task.fields)}")
+
+    # 多格式复选
+    lp.set_selected_modes(["records", "links", "meta"])
+    task_multi = lp.collect_task()
+    check("collect_task multi modes",
+          task_multi.modes == ["records", "links", "meta"]
+          and task_multi.mode == "records",
+          str(task_multi.modes))
+    check("multi modes persisted to prefs",
+          win.prefs.last_modes == ["records", "links", "meta"],
+          str(win.prefs.last_modes))
+    lp.set_selected_modes(["records"])
+
+    # 全选 / 清空选择
+    lp.btn_check_all.click()
+    check("check all formats", len(lp.selected_modes()) == 18,
+          str(len(lp.selected_modes())))
+    lp.btn_check_none.click()
+    check("clear format selection", lp.selected_modes() == [])
+    lp.set_selected_modes(["records"])
+
+    # 反爬 / 下载上限设置
+    lp.stealth_chk.setChecked(False)
+    lp.download_spin.setValue(12)
+    win._on_run_settings()
+    check("run settings applied",
+          win.browser.stealth_enabled is False
+          and win.browser.max_download_mb == 12
+          and win.prefs.max_download_mb == 12,
+          f"stealth={win.browser.stealth_enabled} limit={win.browser.max_download_mb}")
+    lp.stealth_chk.setChecked(True)
+    lp.download_spin.setValue(50)
+    win._on_run_settings()
+    check("run settings restored",
+          win.browser.stealth_enabled is True and win.browser.max_download_mb == 50)
+
+    lp.set_running(True)
+    check("set_running(True)", not lp.btn_start.isEnabled() and lp.btn_stop.isEnabled())
+    lp.set_running(False)
+    check("set_running(False)", lp.btn_start.isEnabled())
+
+    lp.btn_stop.click()          # 停止按钮 -> crawler.stop_task()
+    lp.btn_clear.click()         # 清空按钮 -> right_panel.clear()
+    check("stop/clear buttons ok", True)
+
+    # 未填 URL 时点开始：应弹出提示而不崩溃
+    tb.url_edit.setText("")
+    lp.btn_start.click()
+    check("start without url is safe", True)
+
+    # ---- 停止按钮必须让「开始抓取」重新可用（回归 #7）----
+    from models.task import Task
+    lp.set_selected_modes(["records"])
+    lp.fields_edit.setPlainText("标题 | .title | text |")
+    lp.selector_edit.setText(".item")
+    stop_task = Task(url=file_url("page1.html"), modes=["records"],
+                     selector=".item",
+                     fields=Field.parse_block("标题 | .title | text |"),
+                     max_pages=1, delay=0.1, autoscroll=False)
+    win.crawler.start_task(stop_task)
+    spin(200)
+    check("start disabled while running",
+          not lp.btn_start.isEnabled() and lp.btn_stop.isEnabled(),
+          f"start={lp.btn_start.isEnabled()} stop={lp.btn_stop.isEnabled()}")
+    win.crawler.stop_task()
+    spin(400)
+    check("start re-enabled after stop",
+          lp.btn_start.isEnabled() and not lp.btn_stop.isEnabled(),
+          f"start={lp.btn_start.isEnabled()} stop={lp.btn_stop.isEnabled()}")
+
+    # ================= 4. 右侧面板 =================
+    rp = win.right_panel
+    rp.append_rows([
+        {"标题": "A", "链接": "https://e.com/a", "价格": "1"},
+        {"标题": "B", "链接": "https://e.com/b", "价格": "2"},
+    ])
+    check("append_rows", rp.table.rowCount() == 2, f"rows={rp.table.rowCount()}")
+
+    dialog["save"] = save_paths["csv"]
+    rp.export("csv")
+    check("export csv", os.path.isfile(save_paths["csv"]), save_paths["csv"])
+    dialog["save"] = save_paths["json"]
+    rp.export("json")
+    check("export json", os.path.isfile(save_paths["json"]), save_paths["json"])
+    dialog["save"] = None
+
+    rp.log("INFO", "ui test log line")
+    check("panel log", "ui test log line" in rp.log_view.toPlainText())
+
+    rp.set_task_summary("任务完成 2 条")
+    check("task summary", "2 条" in rp.task_view.toPlainText())
+
+    rp.clear()
+    check("panel clear", rp.table.rowCount() == 0)
+
+    # ================= 5. Cookie / Profile 面板 =================
+    cpanel = rp.cookie_panel
+    cm = win.cookie_manager
+
+    cpanel.refresh()
+    check("cookie refresh", True)
+
+    cpanel.table.setRowCount(0)
+    cpanel._on_add()                       # 使用 FakeCookieDialog
+    spin(700)
+    names = [c["name"] for c in cm.list_cookies()]
+    check("cookie add via UI", "ui_ck" in names, str(names))
+
+    # 选中第一行 -> 编辑 / 删除
+    if cpanel.table.rowCount() > 0:
+        cpanel.table.selectRow(0)
+        cpanel._on_edit()
+        spin(500)
+    check("cookie edit via UI", "ui_ck" in [c["name"] for c in cm.list_cookies()])
+
+    dialog["save"] = cookie_io["export"]
+    cpanel._on_export()
+    dialog["save"] = None
+    check("cookie export via UI", os.path.isfile(cookie_io["export"]), cookie_io["export"])
+
+    # 准备导入文件
+    import json as _json
+    with open(cookie_io["import"], "w", encoding="utf-8") as fh:
+        _json.dump([{"name": "imp_ck", "value": "v", "domain": "imp.com", "path": "/"}], fh)
+    dialog["open"] = cookie_io["import"]
+    cpanel._on_import()
+    dialog["open"] = None
+    spin(700)
+    check("cookie import via UI", "imp_ck" in [c["name"] for c in cm.list_cookies()],
+          str([c["name"] for c in cm.list_cookies()]))
+
+    if cpanel.table.rowCount() > 0:
+        cpanel.table.selectRow(0)
+        cpanel._on_delete()
+        spin(500)
+    check("cookie delete via UI", True)
+
+    cpanel._on_new_profile()               # FakeInputDialog -> "uitest"
+    spin(300)
+    from core.browser import list_profiles
+    check("new profile via UI", "uitest" in list_profiles(), str(list_profiles()))
+
+    # 切换 Profile（走 cookie 集切换）
+    cpanel._on_profile_changed("uitest")
+    spin(600)
+    check("switch profile via UI", browser.profile_name == "uitest", browser.profile_name)
+    cpanel._on_profile_changed("default")
+    spin(600)
+    check("switch back to default", browser.profile_name == "default", browser.profile_name)
+
+    # 设为默认 Profile（需先在组合框中选中目标项）
+    idx = cpanel.profile_combo.findText("uitest")
+    if idx >= 0:
+        cpanel.profile_combo.setCurrentIndex(idx)
+    combo_before = cpanel.profile_combo.currentText()
+    cpanel._on_set_default()
+    items = [cpanel.profile_combo.itemText(i)
+             for i in range(cpanel.profile_combo.count())]
+    check("set default profile", win.prefs.default_profile == "uitest",
+          f"combo_before={combo_before!r} items={items} "
+          f"after={win.prefs.default_profile!r} shared={cpanel.prefs is win.prefs}")
+
+    # 删除 Profile（同样先选中）
+    idx = cpanel.profile_combo.findText("uitest")
+    if idx >= 0:
+        cpanel.profile_combo.setCurrentIndex(idx)
+    cpanel._on_delete_profile()            # FakeQuestion -> Yes
+    spin(300)
+    check("delete profile via UI", "uitest" not in list_profiles(), str(list_profiles()))
+    win.prefs.default_profile = "default"  # 复位，避免影响后续运行
+
+    cpanel._on_clear_all()
+    spin(500)
+    check("clear all cookies via UI", cm.list_cookies() == [],
+          str(cm.list_cookies()))
+
+    # ================= 6. 横幅（确认 / 跳过）与全局信号 =================
+    banner = win.banner
+    banner.show_for("CAPTCHA", "检测到验证码输入框，已确认为验证码")
+    check("banner shown", banner.isVisible() and "验证码" in banner.label.text())
+    check("banner has skip button", banner.btn_skip is not None
+          and banner.btn_skip.text() != "")
+    check("confirmed reason hides skip hint", "跳过" not in banner.label.text(),
+          banner.label.text()[:60])
+
+    # 疑似场景：横幅应提示可以跳过
+    banner.show_for("CAPTCHA", "疑似验证码：命中关键词「验证码」，但未检测到验证码组件。"
+                              "若为误判可点击横幅上的「跳过」继续。")
+    check("suspected reason hints skip", "跳过" in banner.label.text(),
+          banner.label.text()[:80])
+    banner.hide_banner()
+
+    # 跳过按钮 -> crawler.skip_human()：立即恢复且本任务内不再因验证暂停
+    from models.task import Task as _Task
+    win.crawler._task = _Task(url=file_url("rich.html"), modes=["meta"], max_pages=1)
+    win.crawler._cancel = False          # 模拟任务正在运行
+    win.crawler._set_state("HUMAN_WAIT")
+    win.crawler._skip_detection = False
+    banner.btn_skip.click()
+    spin(300)
+    check("skip resumes immediately", win.crawler._state != "HUMAN_WAIT",
+          win.crawler._state)
+    check("skip disables detection for task",
+          win.crawler._skip_detection is True, str(win.crawler._skip_detection))
+    check("skip hides banner", not banner.isVisible())
+    win.crawler.stop_task()
+    spin(200)
+
+    # 新任务应重新启用检测
+    win.crawler.start_task(_Task(url=file_url("rich.html"), modes=["meta"], max_pages=1))
+    check("new task re-enables detection",
+          win.crawler._skip_detection is False, str(win.crawler._skip_detection))
+    win.crawler.stop_task()
+    spin(300)
+
+    banner.show_for("LOGIN", "登录墙")
+    banner.done_clicked.emit()             # -> crawler.on_human_done()
+    spin(200)
+    banner.hide_banner()
+    check("banner hidden", not banner.isVisible())
+
+    s = win.signals
+    s.log.emit("INFO", "signal log")
+    s.state_changed.emit("EXTRACTING")
+    s.page_loaded.emit(True)
+    s.human_required.emit("LOGIN", "检测到登录墙")
+    check("human_required shows banner", banner.isVisible())
+    s.human_cleared.emit()
+    s.data_extracted.emit([{"标题": "sig"}])
+    s.task_started.emit()
+    s.task_finished.emit(5, 1.23)
+    s.picked.emit(".sig", "SigText", "div", "https://e.com/s")
+    s.popup_found.emit([{"id": "m1", "cls": "modal"}])
+    s.popup_closed.emit([{"id": "m1"}])
+    s.profile_changed.emit("default")
+    spin(300)
+    check("global signals handled", True)
+    check("status bar updated",
+          win.status.currentMessage() != "" if hasattr(win, "status") else True,
+          win.status.currentMessage())
+
+    # ================= 7. 中间面板换页 =================
+    win.center_panel.set_page(browser.page)
+    check("center_panel.set_page", win.center_panel.view.page() is browser.page)
+
+    # ================= 8. 关闭 =================
+    win.close()
+    spin(300)
+
+    print(f"\n===== UI RESULT: {len(PASS)} passed, {len(FAIL)} failed =====", flush=True)
+    if FAIL:
+        print("FAILED:", FAIL, flush=True)
+        sys.exit(1)
+    print("ALL OK", flush=True)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """core.extractor —— 数据提取与规范化。
 
-- extract() 用 build_extract_js 生成脚本，js.run_sync 同步执行并解析 JSON
-  （兼容返回 str 与 list/dict 对象两种情况）；
+- extract() 按 task.modes（可多选）依次生成并执行提取脚本，结果合并返回；
+  用 js.run_sync 同步执行并解析 JSON（兼容返回 str 与 list/dict 两种情况）；
 - _normalize 统一为 list[dict]，每条补 "_mode"；
 - 所有值强制可 JSON 序列化。
 """
@@ -13,7 +13,7 @@ from PySide6.QtCore import QObject, Signal
 
 from config.default_settings import SUPPORTED_FORMATS
 from config.js_scripts import build_extract_js
-from utils.logger import log_warn
+from utils.logger import log_info, log_warn
 
 
 class Extractor(QObject):
@@ -34,21 +34,34 @@ class Extractor(QObject):
         self._js = js
 
     def extract(self, page, task) -> list:
-        """执行提取脚本并返回规范化后的 list[dict]。"""
-        try:
-            js_code = build_extract_js(task.mode, task.selector, task.fields,
-                                       task.pattern, task.flags)
-            raw = self._js.run_sync(js_code)
-            if raw is None:
-                log_warn(f"[extract] 脚本无返回（mode={task.mode}）")
-                return []
-            data = self._parse(raw)
-            rows = self._normalize(task.mode, data)
-            self.extracted.emit(rows)
-            return rows
-        except Exception as e:
-            log_warn(f"[extract] 提取失败：{e}")
+        """按 task.modes 依次执行提取，返回合并后的 list[dict]。
+
+        支持多格式复选：每种格式独立跑一遍提取脚本，结果按序拼接；
+        每条记录都带 `_mode` 字段，便于在结果表中区分来源格式。
+        """
+        modes = [m for m in (getattr(task, "modes", None) or [task.mode]) if m]
+        if not modes:
             return []
+
+        all_rows = []
+        for mode in modes:
+            try:
+                js_code = build_extract_js(mode, task.selector, task.fields,
+                                           task.pattern, task.flags)
+                raw = self._js.run_sync(js_code)
+                if raw is None:
+                    log_warn(f"[extract] 脚本无返回（mode={mode}）")
+                    continue
+                data = self._parse(raw)
+                rows = self._normalize(mode, data)
+                all_rows.extend(rows)
+                log_info(f"[extract] {mode}：{len(rows)} 条")
+            except Exception as e:
+                log_warn(f"[extract] {mode} 提取失败：{e}")
+
+        if all_rows:
+            self.extracted.emit(all_rows)
+        return all_rows
 
     @staticmethod
     def _parse(raw):

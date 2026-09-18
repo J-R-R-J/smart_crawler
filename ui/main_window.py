@@ -4,10 +4,10 @@
 import os
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QSplitter, QMessageBox,
+    QMainWindow, QWidget, QVBoxLayout, QSplitter, QMessageBox, QDialog,
 )
 
-from config.constants import APP_TITLE, DEFAULT_PROFILE
+from config.constants import APP_TITLE, APP_VERSION, DEFAULT_PROFILE
 from config.js_scripts import QWEBCHANNEL_JS
 from config.welcome import WELCOME_HTML
 from core.browser      import Browser
@@ -22,13 +22,14 @@ from .banner       import HumanBanner
 from .left_panel   import LeftPanel
 from .center_panel import CenterPanel
 from .right_panel  import RightPanel
+from .keyword_dialog import KeywordDialog
 
 
 class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(APP_TITLE)
+        self.setWindowTitle(f"{APP_TITLE}  v{APP_VERSION}")
         self.resize(1560, 940)
 
         self.signals = get_signals()
@@ -38,6 +39,8 @@ class MainWindow(QMainWindow):
         self.browser = Browser(
             profile_name=self.prefs.last_profile or DEFAULT_PROFILE,
             popup_strategy=self.prefs.popup_strategy,
+            stealth_enabled=self.prefs.stealth_enabled,
+            max_download_mb=self.prefs.max_download_mb,
         )
         self.cookie_manager = CookieManager(self.browser.profile, self)
         # Profile=cookie 集：绑定当前 profile 名，并载入其已保存的 cookie
@@ -61,8 +64,9 @@ class MainWindow(QMainWindow):
         self.browser.page.setHtml(WELCOME_HTML)
 
         log_info("=" * 52)
-        log_info(f"SmartCrawler 已启动 · Profile='{self.browser.profile_name}' · "
-                 f"弹窗策略='{self.prefs.popup_strategy}'")
+        log_info(f"SmartCrawler v{APP_VERSION} 已启动 · Profile='{self.browser.profile_name}' · "
+                 f"弹窗策略='{self.prefs.popup_strategy}' · "
+                 f"反爬伪装={'开' if self.browser.stealth_enabled else '关'}")
         self.signals.log.emit("INFO", "就绪。输入网址并加载，选择抓取格式，然后开始抓取。")
 
     # ==================================================================
@@ -121,11 +125,14 @@ class MainWindow(QMainWindow):
 
         # --- Banner ---
         self.banner.done_clicked.connect(self.crawler.on_human_done)
+        self.banner.skip_clicked.connect(self.crawler.skip_human)
 
         # --- LeftPanel ---
         self.left_panel.start_clicked.connect(self._on_start)
         self.left_panel.stop_clicked.connect(self.crawler.stop_task)
         self.left_panel.clear_clicked.connect(self.right_panel.clear)
+        self.left_panel.keywords_clicked.connect(self._on_keywords)
+        self.left_panel.settings_changed.connect(self._on_run_settings)
 
         # --- Browser → URL ---
         self.browser.url_changed.connect(self.top_bar.set_url)
@@ -163,7 +170,7 @@ class MainWindow(QMainWindow):
         if not url:
             QMessageBox.information(self, "提示", "请先输入要抓取的网址。")
             return
-        if not url.lower().startswith(("http://", "https://")):
+        if "://" not in url:
             url = "https://" + url
             self.top_bar.set_url(url)
         task.url = url
@@ -178,6 +185,28 @@ class MainWindow(QMainWindow):
     def _on_popup_strategy(self, key: str):
         self.prefs.popup_strategy = key
         self.browser.set_popup_strategy(key)
+
+    # ------------------------------------------------------------------
+    def _on_keywords(self):
+        """打开检测关键词设置对话框。"""
+        dlg = KeywordDialog(self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self.signals.log.emit("INFO", "检测关键词已更新，立即生效。")
+            log_info("[ui] 检测关键词已更新")
+
+    def _on_run_settings(self):
+        """反爬伪装 / 下载上限变化：同步到浏览器并持久化。"""
+        stealth = self.left_panel.stealth_enabled()
+        limit = self.left_panel.max_download_mb()
+        self.prefs.stealth_enabled = stealth
+        self.prefs.max_download_mb = limit
+        self.browser.stealth_enabled = stealth
+        self.browser.max_download_mb = limit
+        self.signals.log.emit(
+            "INFO",
+            f"运行设置已更新：反爬伪装 {'开' if stealth else '关'}，"
+            f"下载上限 {limit} MB" if limit else
+            f"运行设置已更新：反爬伪装 {'开' if stealth else '关'}，下载不限大小")
 
     # ------------------------------------------------------------------
     def _on_log(self, level: str, msg: str):
@@ -242,3 +271,31 @@ class MainWindow(QMainWindow):
         self.center_panel.set_page(self.browser.page)
         # 重新注入 WebChannel
         QTimer.singleShot(300, lambda: self.browser.js.run(QWEBCHANNEL_JS))
+
+    # ==================================================================
+    # 退出清理
+    # ==================================================================
+    def closeEvent(self, event):
+        """关闭窗口：停止任务并按要求顺序销毁浏览器引擎。
+
+        必须先销毁 page 再销毁 profile，否则 QtWebEngine 会在退出阶段报
+        「Release of profile requested but WebEnginePage still not deleted」
+        并可能崩溃。
+        """
+        try:
+            self.crawler.stop_task()
+        except Exception:
+            pass
+        try:
+            self.center_panel.view.setPage(None)
+        except Exception:
+            pass
+        try:
+            self.browser.close()
+        except Exception:
+            pass
+        try:
+            self.prefs.sync()
+        except Exception:
+            pass
+        super().closeEvent(event)

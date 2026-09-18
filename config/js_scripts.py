@@ -5,6 +5,7 @@
 - QWEBCHANNEL_JS / PICKER_JS / PICKER_TEARDOWN_JS：桥接与元素拾取
 - POPUP_SCAN_JS / POPUP_CLOSE_JS / POPUP_REMOVE_JS：弹窗扫描/关闭/移除
 - SCROLL_JS / GET_HTML_JS / GET_TEXT_JS / GET_TITLE_JS：页面工具
+- STEALTH_JS：自动化浏览器特征伪装
 - build_extract_js()：生成 IIFE 提取脚本，立即执行并返回 JSON 字符串
 
 关键词表 / 关闭选择器表从 config.default_settings 注入（json.dumps），
@@ -19,6 +20,7 @@ __all__ = [
     "QWEBCHANNEL_JS", "PICKER_JS", "PICKER_TEARDOWN_JS",
     "POPUP_SCAN_JS", "POPUP_CLOSE_JS", "POPUP_REMOVE_JS",
     "SCROLL_JS", "GET_HTML_JS", "GET_TEXT_JS", "GET_TITLE_JS",
+    "STEALTH_JS", "CAPTCHA_PROBE_JS", "LOGIN_PROBE_JS",
     "build_extract_js",
 ]
 
@@ -37,6 +39,218 @@ def _inject(template: str, **values) -> str:
     merged = dict(_BASE_INJECT)
     merged.update(values)
     return _PLACEHOLDER_RE.sub(lambda m: merged[m.group(1)], template).strip()
+
+
+# ---------------------------------------------------------------------------
+# 反爬特征伪装（DocumentCreation 注入，早于页面脚本执行）
+#
+# 目的：消除「自动化浏览器」的明显指纹，降低被风控直接拦截的概率。
+# 仅做常规浏览器特征对齐，**不包含**验证码识别或绕过逻辑——
+# 遇到验证码仍交由人工处理（见 core/crawler 的人机协作流程）。
+# ---------------------------------------------------------------------------
+STEALTH_JS = r"""
+(function(){
+    try {
+        Object.defineProperty(navigator, 'webdriver', { get: function(){ return undefined; } });
+    } catch (e) {}
+
+    try {
+        Object.defineProperty(navigator, 'languages', {
+            get: function(){ return ['zh-CN', 'zh', 'en-US', 'en']; }
+        });
+        Object.defineProperty(navigator, 'language', {
+            get: function(){ return 'zh-CN'; }
+        });
+    } catch (e) {}
+
+    try {
+        Object.defineProperty(navigator, 'platform', { get: function(){ return 'Win32'; } });
+        Object.defineProperty(navigator, 'hardwareConcurrency', { get: function(){ return 8; } });
+        Object.defineProperty(navigator, 'deviceMemory', { get: function(){ return 8; } });
+        Object.defineProperty(navigator, 'maxTouchPoints', { get: function(){ return 0; } });
+    } catch (e) {}
+
+    try {
+        if (!navigator.plugins || navigator.plugins.length === 0) {
+            var fakePlugins = [
+                { name: 'PDF Viewer', filename: 'internal-pdf-viewer' },
+                { name: 'Chrome PDF Viewer', filename: 'internal-pdf-viewer' },
+                { name: 'Chromium PDF Viewer', filename: 'internal-pdf-viewer' }
+            ];
+            fakePlugins.item = function(i){ return this[i]; };
+            fakePlugins.namedItem = function(n){
+                for (var i = 0; i < this.length; i++) {
+                    if (this[i].name === n) { return this[i]; }
+                }
+                return null;
+            };
+            Object.defineProperty(navigator, 'plugins', { get: function(){ return fakePlugins; } });
+        }
+    } catch (e) {}
+
+    try {
+        if (!window.chrome) { window.chrome = {}; }
+        if (!window.chrome.runtime) { window.chrome.runtime = {}; }
+    } catch (e) {}
+
+    try {
+        if (navigator.permissions && navigator.permissions.query) {
+            var origQuery = navigator.permissions.query.bind(navigator.permissions);
+            navigator.permissions.query = function(params){
+                if (params && params.name === 'notifications') {
+                    return Promise.resolve({ state: Notification.permission });
+                }
+                return origQuery(params);
+            };
+        }
+    } catch (e) {}
+
+    try {
+        var getParam = WebGLRenderingContext.prototype.getParameter;
+        WebGLRenderingContext.prototype.getParameter = function(p){
+            if (p === 37445) { return 'Intel Inc.'; }
+            if (p === 37446) { return 'Intel Iris OpenGL Engine'; }
+            return getParam.apply(this, arguments);
+        };
+    } catch (e) {}
+})();
+"""
+
+
+# ---------------------------------------------------------------------------
+# 结构化探测：页面里是否真的存在验证码 / 登录表单
+#
+# 关键词匹配容易误判（帮助页、说明文字、短信验证码标签都会命中），
+# 因此命中关键词后再用本脚本做结构确认：
+#   - 验证码输入框（name/id/placeholder 命中 captcha / verify / 验证码 …）
+#   - 第三方验证组件 iframe（reCAPTCHA / hCaptcha / Turnstile / Geetest / 网易易盾 …）
+#   - 已知的验证组件容器（.g-recaptcha、#challenge-form、.nc-container …）
+#   - 滑块类验证元素
+# 只统计**可见**元素，避免命中隐藏模板。
+#
+# 返回 JSON 字符串：{"found": true, "kinds": [...], "details": ["...", ...]}
+# ---------------------------------------------------------------------------
+CAPTCHA_PROBE_JS = r"""
+(function(){
+    function visible(el){
+        if (!el || el.nodeType !== 1) { return false; }
+        var st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') {
+            return false;
+        }
+        var r = el.getBoundingClientRect();
+        if (r.width < 2 || r.height < 2) { return false; }
+        return true;
+    }
+
+    function qsa(sel){
+        try { return Array.prototype.slice.call(document.querySelectorAll(sel)); }
+        catch (e) { return []; }
+    }
+
+    var kinds = [], details = [];
+
+    function hit(kind, detail){
+        if (kinds.indexOf(kind) < 0) { kinds.push(kind); }
+        if (details.length < 5 && details.indexOf(detail) < 0) { details.push(detail); }
+    }
+
+    // 1) 验证码输入框
+    var inputSelectors = [
+        'input[name*="captcha" i]', 'input[id*="captcha" i]',
+        'input[name*="verify" i]', 'input[id*="verify" i]',
+        'input[name*="checkcode" i]', 'input[id*="checkcode" i]',
+        'input[name*="vcode" i]', 'input[id*="vcode" i]',
+        'input[name*="authcode" i]', 'input[id*="authcode" i]',
+        'input[placeholder*="验证码"]', 'input[placeholder*="校验码"]',
+        'input[placeholder*="图形码"]', 'input[aria-label*="验证码"]',
+        'input[title*="验证码"]'
+    ];
+    for (var i = 0; i < inputSelectors.length; i++) {
+        var els = qsa(inputSelectors[i]);
+        for (var j = 0; j < els.length; j++) {
+            if (visible(els[j])) {
+                hit('input', 'input: ' + inputSelectors[i]);
+                break;
+            }
+        }
+    }
+
+    // 2) 第三方验证组件 iframe
+    var frameRe = /(recaptcha|hcaptcha|turnstile|geetest|yidun|dingxiang|nc\.js|captcha|challenge|verify)/i;
+    var frames = qsa('iframe');
+    for (var k = 0; k < frames.length; k++) {
+        var src = frames[k].src || frames[k].getAttribute('src') || '';
+        if (src && frameRe.test(src) && visible(frames[k])) {
+            hit('iframe', 'iframe: ' + src.slice(0, 100));
+        }
+    }
+
+    // 3) 已知验证组件容器 / 云盾挑战
+    var containerSelectors = [
+        '.g-recaptcha', '.h-captcha', '.cf-turnstile',
+        '#challenge-form', '#challenge-running', '#cf-challenge-running',
+        '.geetest_holder', '.geetest_panel', '.geetest_widget',
+        '.nc_wrapper', '.nc-container', '#nc_1_wrapper',
+        '.yidun_panel', '.yidun_intellisense',
+        '[class*="captcha" i]', '[id*="captcha" i]',
+        '[class*="verify-box" i]', '[class*="verifybox" i]',
+        '[id*="verify-box" i]', '[class*="slide-verify" i]',
+        '[class*="slider-verify" i]', '[class*="drag-verify" i]'
+    ];
+    for (var m = 0; m < containerSelectors.length; m++) {
+        var cs = qsa(containerSelectors[m]);
+        for (var n = 0; n < cs.length; n++) {
+            if (visible(cs[n])) {
+                hit('container', 'element: ' + containerSelectors[m]);
+                break;
+            }
+        }
+    }
+
+    // 4) 图片验证码：尺寸较小且在疑似验证区域内的 img / canvas
+    var imgs = qsa('img');
+    for (var p = 0; p < imgs.length; p++) {
+        var im = imgs[p];
+        if (!visible(im)) { continue; }
+        var r = im.getBoundingClientRect();
+        var mark = ((im.id || '') + ' ' + (im.className || '') + ' ' +
+                    (im.getAttribute('src') || '') + ' ' +
+                    (im.getAttribute('alt') || '')).toLowerCase();
+        var small = r.width <= 220 && r.height <= 90 && r.width >= 30 && r.height >= 20;
+        if (small && /(captcha|verify|code|yzm|checkcode|vcode)/.test(mark)) {
+            hit('image', 'img: ' + (im.id || im.className || 'captcha-like'));
+            break;
+        }
+    }
+
+    return JSON.stringify({
+        found: kinds.length > 0,
+        kinds: kinds,
+        details: details
+    });
+})();
+"""
+
+
+# ---------------------------------------------------------------------------
+# 结构化探测：是否存在登录表单（用于确认登录墙）
+# 返回 JSON 字符串：{"found": bool, "password": int, "user": int}
+# ---------------------------------------------------------------------------
+LOGIN_PROBE_JS = r"""
+(function(){
+    function count(sel){
+        try { return document.querySelectorAll(sel).length; } catch (e) { return 0; }
+    }
+    var pwd = count('input[type="password"]');
+    var user = count('input[type="text"][name*="user" i],' +
+                     'input[type="email"],' +
+                     'input[name*="account" i],' +
+                     'input[name*="phone" i],' +
+                     'input[name*="mobile" i]');
+    return JSON.stringify({ found: pwd > 0, password: pwd, user: user });
+})();
+"""
 
 
 # ---------------------------------------------------------------------------

@@ -22,6 +22,14 @@ SUPPORTED_FORMATS = [
     ("page_cookies", "页面 Cookie", "当前页面的 Cookie 快照"),
 ]
 
+FORMAT_LABELS = {key: label for key, label, _hint in SUPPORTED_FORMATS}
+FORMAT_HINTS = {key: hint for key, _label, hint in SUPPORTED_FORMATS}
+
+# 各格式对配置项的需求（界面据此按需启用输入框；支持多选格式）
+NEEDS_SELECTOR = ("records", "list")
+NEEDS_FIELDS = ("records",)
+NEEDS_PATTERN = ("regex",)
+
 CAPTCHA_KEYWORDS = [
     "captcha", "验证码", "人机验证", "verify you are human", "are you a robot",
     "请完成验证", "请完成安全验证", "拖动滑块", "滑块验证", "slider verification",
@@ -67,9 +75,21 @@ POPUP_HINT_KEYWORDS = [
 DETECT_INTERVAL_MS = 2000      # 人类验证轮询间隔（毫秒）
 MAX_POPUP_ROUNDS = 3           # 每次加载后弹窗处理最大轮数
 
+# 下载限制：单个文件的下载大小上限（MB），超过则取消
+DEFAULT_MAX_DOWNLOAD_MB = 50
+
+# 结果导出默认目录；空字符串表示使用 constants.EXPORT_DIR
+DEFAULT_EXPORT_DIR = ""
+
+# 反爬对抗默认开关（浏览器特征伪装 + 拟人化延迟抖动）
+DEFAULT_STEALTH_ENABLED = True
+
 __all__ = [
-    "SUPPORTED_FORMATS", "CAPTCHA_KEYWORDS", "HUMAN_VERIFY_KEYWORDS",
+    "SUPPORTED_FORMATS", "FORMAT_LABELS", "FORMAT_HINTS",
+    "CAPTCHA_KEYWORDS", "HUMAN_VERIFY_KEYWORDS",
     "LOGIN_KEYWORDS", "POPUP_STRATEGIES", "DEFAULT_POPUP_STRATEGY",
     "POPUP_CLOSE_SELECTORS", "POPUP_HINT_KEYWORDS",
     "DETECT_INTERVAL_MS", "MAX_POPUP_ROUNDS",
+    "NEEDS_SELECTOR", "NEEDS_FIELDS", "NEEDS_PATTERN",
+    "DEFAULT_MAX_DOWNLOAD_MB", "DEFAULT_EXPORT_DIR", "DEFAULT_STEALTH_ENABLED",
 ]

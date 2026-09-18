@@ -70,17 +70,25 @@ class RightPanel(QWidget):
         lay.addWidget(self.tabs, 1)
 
         # ---------- 底部工具条 ----------
+        self.export_dir_label = QLabel("")
+        self.export_dir_label.setObjectName("hintLabel")
+        lay.addWidget(self.export_dir_label)
+
         bottom = QHBoxLayout()
 
         self.count_label = QLabel("0 条")
         self.count_label.setObjectName("countLabel")
 
+        self.btn_export_dir   = QPushButton("导出目录…")
+        self.btn_clean_temp   = QPushButton("清理临时文件")
         self.btn_open_log_dir = QPushButton("打开日志目录")
         self.btn_clear        = QPushButton("清空结果")
         self.btn_export_csv   = QPushButton("导出 CSV")
         self.btn_export_json  = QPushButton("导出 JSON")
 
         bottom.addWidget(self.count_label, 1)
+        bottom.addWidget(self.btn_export_dir)
+        bottom.addWidget(self.btn_clean_temp)
         bottom.addWidget(self.btn_open_log_dir)
         bottom.addWidget(self.btn_clear)
         bottom.addWidget(self.btn_export_csv)
@@ -92,6 +100,66 @@ class RightPanel(QWidget):
         self.btn_export_csv.clicked.connect(lambda: self.export("csv"))
         self.btn_export_json.clicked.connect(lambda: self.export("json"))
         self.btn_open_log_dir.clicked.connect(self._open_log_dir)
+        self.btn_export_dir.clicked.connect(self._choose_export_dir)
+        self.btn_clean_temp.clicked.connect(self._clean_temp)
+
+        self._refresh_export_dir_label()
+
+    # ==================================================================
+    # 导出目录
+    # ==================================================================
+    def _current_export_dir(self) -> str:
+        """优先使用用户自定义目录，否则用默认导出目录。"""
+        custom = (self.prefs.export_dir or "").strip()
+        if custom and os.path.isdir(custom):
+            return custom
+        return EXPORT_DIR
+
+    def _refresh_export_dir_label(self):
+        self.export_dir_label.setText(f"导出目录：{self._current_export_dir()}")
+        self.btn_export_dir.setToolTip("设置结果导出的默认目录")
+
+    def _choose_export_dir(self):
+        chosen = QFileDialog.getExistingDirectory(
+            self, "选择结果导出目录", self._current_export_dir())
+        if not chosen:
+            # 允许用户清除自定义目录，回退到默认目录
+            if (self.prefs.export_dir or "").strip():
+                self.prefs.export_dir = ""
+                self._refresh_export_dir_label()
+                self.log("INFO", "已恢复默认导出目录")
+            return
+        self.prefs.export_dir = chosen
+        self._refresh_export_dir_label()
+        self.log("INFO", f"导出目录已设为：{chosen}")
+
+    # ==================================================================
+    # 清理临时文件
+    # ==================================================================
+    def _clean_temp(self):
+        from utils import maintenance
+        usage = maintenance.temp_usage()
+        detail = "\n".join(
+            f"  {k}：{maintenance.human_size(v)}" for k, v in usage.items())
+        ret = QMessageBox.question(
+            self, "清理临时文件",
+            "将清理以下内容（不会删除 Profile 与 Cookie）：\n\n"
+            f"{detail}\n\n"
+            "• 浏览器引擎缓存\n• 项目内 __pycache__\n• 根目录临时日志/残留\n\n"
+            "是否继续？")
+        if ret != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            result = maintenance.clean_temp()
+        except Exception as e:
+            QMessageBox.critical(self, "清理失败", str(e))
+            return
+        msg = (f"已释放 {result['freed_text']}\n"
+               f"删除 {len(result['removed'])} 项")
+        if result["skipped"]:
+            msg += f"\n\n{len(result['skipped'])} 项被占用未能删除（可稍后重试）"
+        self.log("INFO", f"[clean] {msg}")
+        QMessageBox.information(self, "清理完成", msg)
 
     # ==================================================================
     # 数据
@@ -170,7 +238,7 @@ class RightPanel(QWidget):
             return
 
         default = os.path.join(
-            EXPORT_DIR,
+            self._current_export_dir(),
             f"result_{time.strftime('%Y%m%d_%H%M%S')}.{fmt}")
         path, _ = QFileDialog.getSaveFileName(
             self, "导出结果", default,
@@ -182,6 +250,11 @@ class RightPanel(QWidget):
                 export_csv(self.rows, self.columns, path)
             else:
                 export_json(self.rows, path)
+            # 记住用户实际保存到的目录，下次默认用它
+            saved_dir = os.path.dirname(os.path.abspath(path))
+            if saved_dir and saved_dir != self.prefs.export_dir:
+                self.prefs.export_dir = saved_dir
+                self._refresh_export_dir_label()
             QMessageBox.information(self, "导出成功", f"已保存到：\n{path}")
         except Exception as e:
             QMessageBox.critical(self, "导出失败", str(e))

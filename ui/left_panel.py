@@ -1,23 +1,28 @@
 # -*- coding: utf-8 -*-
 """左侧抓取配置面板。"""
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox,
-    QComboBox, QLineEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox,
-    QCheckBox, QPushButton, QLabel,
+    QListWidget, QListWidgetItem, QLineEdit, QPlainTextEdit,
+    QSpinBox, QDoubleSpinBox, QCheckBox, QPushButton, QLabel,
 )
 
-from config.default_settings import SUPPORTED_FORMATS
+from config.default_settings import (
+    SUPPORTED_FORMATS, FORMAT_LABELS, FORMAT_HINTS,
+    NEEDS_SELECTOR, NEEDS_FIELDS, NEEDS_PATTERN,
+)
 from models.field import Field
 from models.task  import Task
 from core.user_prefs import UserPrefs
 
 
 class LeftPanel(QWidget):
-    start_clicked = Signal()
-    stop_clicked  = Signal()
-    clear_clicked = Signal()
+    start_clicked   = Signal()
+    stop_clicked    = Signal()
+    clear_clicked   = Signal()
+    keywords_clicked = Signal()          # 打开「检测关键词设置」
+    settings_changed = Signal()          # 反爬 / 下载上限发生变化
 
     def __init__(self, prefs: UserPrefs, parent=None):
         super().__init__(parent)
@@ -33,22 +38,37 @@ class LeftPanel(QWidget):
         lay.setContentsMargins(0, 0, 6, 0)
         lay.setSpacing(8)
 
-        # ---------- ① 抓取格式 ----------
-        g1 = QGroupBox("① 抓取目标格式")
-        f1 = QFormLayout(g1)
+        # ---------- ① 抓取格式（可多选） ----------
+        g1 = QGroupBox("① 抓取目标格式（可多选）")
+        v1 = QVBoxLayout(g1)
 
-        self.mode_combo = QComboBox()
+        self.mode_list = QListWidget()
+        self.mode_list.setFixedHeight(150)
+        self.mode_list.setToolTip("勾选一种或多种格式，将同时提取并合并结果")
         for key, label, hint in SUPPORTED_FORMATS:
-            self.mode_combo.addItem(f"{label}", key)
-            self.mode_combo.setItemData(
-                self.mode_combo.count() - 1, hint, 3)  # ToolTip
-        self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
-        f1.addRow("格式：", self.mode_combo)
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, key)
+            item.setToolTip(hint)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Unchecked)
+            self.mode_list.addItem(item)
+        self.mode_list.itemChanged.connect(self._update_hints)
+        v1.addWidget(self.mode_list)
+
+        row_sel = QHBoxLayout()
+        self.btn_check_all = QPushButton("全选")
+        self.btn_check_none = QPushButton("清空选择")
+        row_sel.addWidget(self.btn_check_all)
+        row_sel.addWidget(self.btn_check_none)
+        row_sel.addStretch(1)
+        v1.addLayout(row_sel)
 
         self.mode_hint = QLabel("")
         self.mode_hint.setObjectName("hintLabel")
-        f1.addRow("", self.mode_hint)
+        self.mode_hint.setWordWrap(True)
+        v1.addWidget(self.mode_hint)
 
+        f1 = QFormLayout()
         self.selector_edit = QLineEdit()
         self.selector_edit.setPlaceholderText("容器选择器，如 .item 或 #list > li")
         f1.addRow("容器选择器：", self.selector_edit)
@@ -71,6 +91,12 @@ class LeftPanel(QWidget):
         self.pattern_edit.setPlaceholderText(
             r"正则表达式（regex 模式），如 (\d{4}-\d{2}-\d{2})")
         f1.addRow("正则：", self.pattern_edit)
+        v1.addLayout(f1)
+
+        self.btn_keywords = QPushButton("检测关键词设置…")
+        self.btn_keywords.setToolTip(
+            "自定义验证码 / 频控 / 登录墙的识别关键词")
+        v1.addWidget(self.btn_keywords)
 
         lay.addWidget(g1)
 
@@ -97,6 +123,19 @@ class LeftPanel(QWidget):
         self.autoscroll_chk = QCheckBox("自动滚动触发懒加载")
         self.autoscroll_chk.setChecked(True)
         f2.addRow("", self.autoscroll_chk)
+
+        self.stealth_chk = QCheckBox("启用反爬特征伪装（推荐）")
+        self.stealth_chk.setToolTip(
+            "隐藏自动化浏览器特征，并让每页延迟随机抖动，降低被风控拦截的概率")
+        self.stealth_chk.setChecked(True)
+        f2.addRow("", self.stealth_chk)
+
+        self.download_spin = QSpinBox()
+        self.download_spin.setRange(0, 102400)
+        self.download_spin.setValue(50)
+        self.download_spin.setSuffix(" MB")
+        self.download_spin.setToolTip("单个文件下载大小上限，0 表示不限制")
+        f2.addRow("下载上限：", self.download_spin)
 
         lay.addWidget(g2)
 
@@ -126,45 +165,99 @@ class LeftPanel(QWidget):
         self.btn_start.clicked.connect(self.start_clicked)
         self.btn_stop.clicked.connect(self.stop_clicked)
         self.btn_clear.clicked.connect(self.clear_clicked)
+        self.btn_keywords.clicked.connect(self.keywords_clicked)
+        self.btn_check_all.clicked.connect(lambda: self._set_all_checked(True))
+        self.btn_check_none.clicked.connect(lambda: self._set_all_checked(False))
+        self.stealth_chk.toggled.connect(lambda _v: self.settings_changed.emit())
+        self.download_spin.valueChanged.connect(
+            lambda _v: self.settings_changed.emit())
 
-        self._on_mode_changed(0)
+        self._update_hints()
 
     # ==================================================================
-    # 逻辑
+    # 运行设置（反爬 / 下载上限）
     # ==================================================================
-    def _on_mode_changed(self, idx: int):
-        key = self.mode_combo.itemData(idx) or "records"
-        hint = self.mode_combo.itemData(idx, 3) or ""
-        self.mode_hint.setText(hint)
-        # 简单显隐控制
-        need_selector = key in ("records", "list")
-        need_fields   = key == "records"
-        need_pattern  = key == "regex"
-        self.selector_edit.setEnabled(need_selector or key in ("records", "list"))
-        self.fields_edit.setEnabled(need_fields)
-        self.pattern_edit.setEnabled(need_pattern)
+    def stealth_enabled(self) -> bool:
+        return self.stealth_chk.isChecked()
+
+    def max_download_mb(self) -> int:
+        return int(self.download_spin.value())
+
+    def set_run_settings(self, stealth: bool, max_download_mb: int) -> None:
+        for w in (self.stealth_chk, self.download_spin):
+            w.blockSignals(True)
+        self.stealth_chk.setChecked(bool(stealth))
+        self.download_spin.setValue(int(max_download_mb or 0))
+        for w in (self.stealth_chk, self.download_spin):
+            w.blockSignals(False)
+
+    # ==================================================================
+    # 格式多选
+    # ==================================================================
+    def _set_all_checked(self, checked: bool) -> None:
+        state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
+        self.mode_list.blockSignals(True)
+        for i in range(self.mode_list.count()):
+            self.mode_list.item(i).setCheckState(state)
+        self.mode_list.blockSignals(False)
+        self._update_hints()
+
+    def selected_modes(self) -> list:
+        """当前勾选的格式 key 列表（按列表顺序）。"""
+        out = []
+        for i in range(self.mode_list.count()):
+            item = self.mode_list.item(i)
+            if item.checkState() == Qt.CheckState.Checked:
+                out.append(item.data(Qt.ItemDataRole.UserRole))
+        return out
+
+    def set_selected_modes(self, modes) -> None:
+        wanted = set(modes or [])
+        self.mode_list.blockSignals(True)
+        for i in range(self.mode_list.count()):
+            item = self.mode_list.item(i)
+            key = item.data(Qt.ItemDataRole.UserRole)
+            item.setCheckState(Qt.CheckState.Checked if key in wanted
+                               else Qt.CheckState.Unchecked)
+        self.mode_list.blockSignals(False)
+        self._update_hints()
+
+    def _update_hints(self, *_):
+        modes = self.selected_modes()
+        if not modes:
+            self.mode_hint.setText("请至少勾选一种格式")
+        else:
+            labels = [FORMAT_LABELS.get(m, m) for m in modes]
+            if len(labels) <= 3:
+                names = "、".join(labels)
+            else:
+                names = "、".join(labels[:3]) + f" 等 {len(labels)} 种"
+            self.mode_hint.setText(f"已选 {len(modes)} 种：{names}")
+
+        # 按需启用输入框
+        self.selector_edit.setEnabled(any(m in NEEDS_SELECTOR for m in modes))
+        self.fields_edit.setEnabled(any(m in NEEDS_FIELDS for m in modes))
+        self.pattern_edit.setEnabled(any(m in NEEDS_PATTERN for m in modes))
 
     # ------------------------------------------------------------------
     def _load_prefs(self):
         p = self.prefs
-        # mode
-        for i in range(self.mode_combo.count()):
-            if self.mode_combo.itemData(i) == p.last_mode:
-                self.mode_combo.setCurrentIndex(i)
-                break
+        modes = p.last_modes or ([p.last_mode] if p.last_mode else []) or ["records"]
+        self.set_selected_modes(modes)
         self.delay_spin.setValue(p.last_delay)
         self.max_pages_spin.setValue(p.last_max_pages)
         self.autoscroll_chk.setChecked(p.last_autoscroll)
+        self.set_run_settings(p.stealth_enabled, p.max_download_mb)
 
     # ------------------------------------------------------------------
     def collect_task(self) -> Task:
         """从 UI 收集当前配置，生成 Task 对象。"""
-        mode = self.mode_combo.currentData() or "records"
+        modes = self.selected_modes()
         fields = Field.parse_block(self.fields_edit.toPlainText())
 
         task = Task(
             url="",  # URL 由 main_window 提供
-            mode=mode,
+            modes=modes,
             selector=self.selector_edit.text().strip(),
             fields=fields,
             pattern=self.pattern_edit.text().strip(),
@@ -177,7 +270,8 @@ class LeftPanel(QWidget):
 
         # 记忆偏好
         p = self.prefs
-        p.last_mode = mode
+        p.last_modes = modes
+        p.last_mode = modes[0] if modes else ""   # 兼容旧字段
         p.last_delay = task.delay
         p.last_max_pages = task.max_pages
         p.last_autoscroll = task.autoscroll
