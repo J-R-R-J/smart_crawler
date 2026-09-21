@@ -65,11 +65,18 @@ QWEBCHANNEL_LOADER_JS = (
     "})();"
 )
 
-# 桌面 Chrome UA（含 SmartCrawler/1.0 标识）
+# 桌面 Chrome UA。
+#
+# 默认**不追加**任何自定义标识：UA 后缀是最好用的指纹之一，
+# 带上 "SmartCrawler/1.0" 这类字样等于向站点自报「我是自动化工具」，
+# 会让其他所有伪装措施失效。
+# 如果你希望在被采集站点上保持可识别性（更透明的做法），
+# 可以设置环境变量 SMARTCRAWLER_UA_SUFFIX 让它追加到 UA 末尾。
+_UA_SUFFIX = os.environ.get("SMARTCRAWLER_UA_SUFFIX", "").strip()
 _DESKTOP_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 SmartCrawler/1.0"
-)
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+) + (f" {_UA_SUFFIX}" if _UA_SUFFIX else "")
 
 # Profile 目录名仅允许：字母、数字、下划线、连字符
 _PROFILE_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -82,12 +89,14 @@ class Browser(QObject):
     page_replaced = Signal()      # page 对象被替换（Profile 切换）
 
     def __init__(self, profile_name: str = "default", popup_strategy: str = "close",
-                 stealth_enabled: bool = True, max_download_mb: int = 50):
+                 stealth_enabled: bool = True, max_download_mb: int = 50,
+                 allowed_download_exts: str = ""):
         super().__init__()
         self._profile_name = profile_name
         self._popup_strategy = popup_strategy
         self._stealth_enabled = bool(stealth_enabled)
         self._max_download_mb = max(0, int(max_download_mb or 0))
+        self._allowed_download_exts = self._parse_exts(allowed_download_exts)
         self._downloads = []      # 保活：进行中的下载对象
         self._old_refs = []       # 保留旧 page/profile/channel/bridge 引用直至销毁
 
@@ -176,6 +185,42 @@ class Browser(QObject):
             self._max_download_mb = max(0, int(value))
         except (TypeError, ValueError):
             self._max_download_mb = 0
+
+    @property
+    def allowed_download_exts(self) -> set:
+        """允许下载的扩展名集合（小写、不含点）；空集合 = 不限制。"""
+        return set(self._allowed_download_exts)
+
+    @allowed_download_exts.setter
+    def allowed_download_exts(self, value) -> None:
+        self._allowed_download_exts = self._parse_exts(value)
+
+    @staticmethod
+    def _parse_exts(value) -> set:
+        """把 "pdf, .CSV , xlsx" 解析为 {"pdf", "csv", "xlsx"}。"""
+        if not value:
+            return set()
+        if isinstance(value, (list, tuple, set)):
+            items = list(value)
+        else:
+            items = str(value).replace("，", ",").split(",")
+        out = set()
+        for it in items:
+            s = str(it).strip().lower().lstrip("*").lstrip(".")
+            if s:
+                out.add(s)
+        return out
+
+    def _ext_allowed(self, filename: str) -> bool:
+        """按扩展名白名单判断是否允许下载；白名单为空时全部允许。"""
+        allowed = self._allowed_download_exts
+        if not allowed:
+            return True
+        name = (filename or "").strip().lower()
+        if "." not in name:
+            return False
+        ext = name.rsplit(".", 1)[-1]
+        return ext in allowed
 
     # --------------------------------------------------------------
     # 导航
@@ -322,7 +367,7 @@ class Browser(QObject):
             log_warn(f"[stealth] 移除失败：{e}")
 
     # --------------------------------------------------------------
-    # 下载：大小限制 + 归档到 crawler_data/downloads
+    # 下载：格式白名单 + 大小限制 + 归档到 crawler_data/downloads
     # --------------------------------------------------------------
     def _on_download_requested(self, download) -> None:
         try:
@@ -331,6 +376,16 @@ class Browser(QObject):
             limit_bytes = self._max_download_mb * 1024 * 1024
             total = int(download.totalBytes() or 0)
 
+            # ---- 1. 扩展名白名单 ----
+            if not self._ext_allowed(name):
+                allowed = "、".join(sorted(self._allowed_download_exts))
+                log_warn(f"[download] 已拒绝 {name}：扩展名不在允许列表（{allowed}）")
+                self._signals_log(
+                    "WARN", f"下载被拒绝（格式不允许）：{name}")
+                download.cancel()
+                return
+
+            # ---- 2. 大小上限（服务端已给出总大小）----
             if limit_bytes and total > limit_bytes:
                 log_warn(f"[download] 已拒绝 {name}："
                          f"{total / 1048576:.1f} MB 超过限制 "

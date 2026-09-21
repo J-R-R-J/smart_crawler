@@ -5,6 +5,54 @@
 
 ---
 
+## [0.0.3] - 2026-09-20
+
+本版聚焦「界面可用性 + 反检测加固 + 下载控制」。
+
+### 新增
+
+- **下载格式白名单**：左侧面板新增「下载格式」，只放行指定扩展名（如 `pdf,csv,xlsx`），
+  留空表示不限；与原有的下载大小上限共同构成两道关卡，均在**发起阶段**拦截。
+  支持全角逗号、大小写混写与前导点（`.PDF` 等价于 `pdf`）。
+- **左侧配置面板可滚动**：面板内容改用滚动区承载，配置项再多也不会被窗口高度截断。
+- **窗口尺寸自适应**：初始尺寸按可用屏幕计算（最多占 90%），并设最小尺寸 1000×620，
+  解决「默认窗口高过屏幕看不到底部」与「最大化后控件被挤压」两个问题。
+- **反爬特征自检工具**：`tools/probe_stealth.py` 升级为完整指纹报告，
+  分组打印实际取值并标出与期望不符的项，另附 18 个现代 JS API 的可用性检查。
+
+### 反检测加固
+
+- **`navigator.webdriver` 彻底移除**：改为从 `Navigator.prototype` 上 `delete`，
+  不再留下 own property 痕迹；`'webdriver' in navigator` 现为 `false`
+  （此前只在实例上覆盖，属性依然存在，反而更易被识别）。
+- **启动参数新增 `--disable-blink-features=AutomationControlled`**：
+  让 Chromium 从源头不设置该自动化标志，比事后用 JS 覆盖更彻底。
+- **清理自动化框架残留标记**：批量移除 Selenium / WebDriver / ChromeDriver
+  （`cdc_`、`$wdc_` 前缀动态扫描）/ PhantomJS / Nightmare / Playwright /
+  Puppeteer，以及 `domAutomation` 等老式自动化桥标记。
+- **扩充环境一致性伪装**：补齐 `window.chrome.app/csi/loadTimes`、
+  `navigator.connection`、`outerWidth/outerHeight`（无头下为 0）、
+  `document.hasFocus()`（无头下恒 false）；`plugins` 与 `mimeTypes` 一起补齐；
+  WebGL 伪装同时覆盖 WebGL 与 WebGL2 两个上下文。
+
+### 变更
+
+- **User-Agent 不再带工具标识**：原先 UA 结尾的 `SmartCrawler/1.0` 等于向站点自报
+  「我是自动化工具」，会让其他所有伪装失效。现改为纯正桌面 Chrome UA；
+  如需保持可识别性（更透明的做法），可设置环境变量 `SMARTCRAWLER_UA_SUFFIX` 追加。
+- 测试扩充至 **183 项**（功能 64 / 界面 64），新增下载白名单、滚动面板、
+  窗口尺寸、关键词配置隔离等断言。
+
+### 说明
+
+- QtWebEngine 基于完整 Chromium，`fetch` / `Promise` / `Intl` / `Proxy` /
+  `ResizeObserver` / `AbortController` / `structuredClone` 等现代 API 全部原生可用，
+  实测 18/18 通过，不存在「API 缺失导致指纹异常」的问题。
+- QtWebEngine 使用自有 IPC，不暴露 CDP（Chrome DevTools Protocol），
+  `$cdc_`、`Runtime.enable` 这类纯 CDP 痕迹本就不存在，程序仍做清理以防万一。
+
+---
+
 ## [0.0.2] - 2026-09-18
 
 本次更新以「降低误判、增强检测、补齐工程细节」为主。
@@ -95,5 +143,6 @@
 - 结果导出 CSV / JSON，日志按天落盘并轮转。
 - 单进程软渲染默认开启，可在容器 / 无 GPU / 远程桌面环境下运行。
 
-[0.0.2]: https://github.com/J-R-R-J/smart_crawler/compare/v0.0.1...v0.0.2
-[0.0.1]: https://github.com/J-R-R-J/smart_crawler/releases/tag/v0.0.1
+[0.0.3]: https://github.com/J-R-R-J/smart_crawler/compare/v0.0.2...v0.0.3
+[0.0.2]: https://github.com/J-R-R-J/smart_crawler/releases/tag/v0.0.2
+[0.0.1]: https://github.com/J-R-R-J/smart_crawler/releases

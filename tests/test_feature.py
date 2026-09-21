@@ -284,27 +284,64 @@ def main():
     check("no false positive", level == "NONE", level)
 
     # ============ 自定义关键词 ============
+    # 先完整备份三组关键词，测试结束后原样还原：
+    # 既避免污染用户配置，也让断言不依赖上一次运行残留的状态。
     from config import keyword_store
-    original = keyword_store.load("captcha")
-    keyword_store.save("captcha", ["自定义拦截词"])
-    check("keyword saved",
-          keyword_store.load("captcha") == ["自定义拦截词"],
-          str(keyword_store.load("captcha")))
-    check("keyword file written", os.path.isfile(keyword_store.STORE_PATH),
-          keyword_store.STORE_PATH)
+    backup = keyword_store.load_all()
+    try:
+        keyword_store.reset()          # 从默认值起步，保证断言可预期
+        original = keyword_store.load("captcha")
 
-    level, reason = det2.classify("<html><body>自定义拦截词</body></html>", "")
-    check("custom keyword works", level == "CAPTCHA" and "自定义拦截词" in reason,
-          f"{level} {reason}")
+        keyword_store.save("captcha", ["自定义拦截词"])
+        check("keyword saved",
+              keyword_store.load("captcha") == ["自定义拦截词"],
+              str(keyword_store.load("captcha")))
+        check("keyword file written", os.path.isfile(keyword_store.STORE_PATH),
+              keyword_store.STORE_PATH)
 
-    level, _ = det2.classify("<html><body>验证码</body></html>", "")
-    check("old keyword replaced", level == "NONE", level)
+        level, reason = det2.classify("<html><body>自定义拦截词</body></html>", "")
+        check("custom keyword works",
+              level == "CAPTCHA" and "自定义拦截词" in reason, f"{level} {reason}")
 
-    keyword_store.reset("captcha")
-    check("keyword reset to default",
-          keyword_store.load("captcha") == original,
-          str(keyword_store.load("captcha")[:2]))
-    check("is_customized False after reset", keyword_store.is_customized() is False)
+        level, _ = det2.classify("<html><body>验证码</body></html>", "")
+        check("old keyword replaced", level == "NONE", level)
+
+        keyword_store.reset("captcha")
+        check("keyword reset to default",
+              keyword_store.load("captcha") == original,
+              str(keyword_store.load("captcha")[:2]))
+
+        keyword_store.reset()          # 三组全部恢复默认
+        check("is_customized False after full reset",
+              keyword_store.is_customized() is False)
+    finally:
+        keyword_store.save_all(backup)
+    check("keyword config restored",
+          keyword_store.load_all() == backup, "已还原测试前的关键词配置")
+
+    # ============ 下载格式白名单 ============
+    browser.allowed_download_exts = "pdf, .CSV ,xlsx"
+    check("download exts parsed",
+          browser.allowed_download_exts == {"pdf", "csv", "xlsx"},
+          str(sorted(browser.allowed_download_exts)))
+    check("ext allowed (lower)", browser._ext_allowed("report.pdf") is True)
+    check("ext allowed (upper)", browser._ext_allowed("DATA.CSV") is True)
+    check("ext rejected (exe)", browser._ext_allowed("setup.exe") is False)
+    check("ext rejected (no ext)", browser._ext_allowed("README") is False)
+    check("ext rejected (double ext)",
+          browser._ext_allowed("evil.pdf.exe") is False)
+
+    browser.allowed_download_exts = ""
+    check("empty whitelist allows all",
+          browser._ext_allowed("anything.exe") is True)
+    check("empty whitelist set", browser.allowed_download_exts == set())
+
+    # 全角逗号也应能解析
+    browser.allowed_download_exts = "pdf，docx"
+    check("fullwidth comma parsed",
+          browser.allowed_download_exts == {"pdf", "docx"},
+          str(sorted(browser.allowed_download_exts)))
+    browser.allowed_download_exts = ""
 
     # ============ 临时文件清理 ============
     from utils import maintenance

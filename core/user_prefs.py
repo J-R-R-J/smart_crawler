@@ -14,7 +14,9 @@ import os
 from PySide6.QtCore import QSettings
 
 from config.constants import DATA_DIR
-from config.default_settings import DEFAULT_MAX_DOWNLOAD_MB, DEFAULT_STEALTH_ENABLED
+from config.default_settings import (
+    DEFAULT_DOWNLOAD_EXTS, DEFAULT_MAX_DOWNLOAD_MB, DEFAULT_STEALTH_ENABLED,
+)
 
 SETTINGS_PATH = os.path.join(DATA_DIR, "settings.ini")
 
@@ -215,6 +217,21 @@ class UserPrefs:
         except (TypeError, ValueError):
             v = DEFAULT_MAX_DOWNLOAD_MB
         self._set("max_download_mb", v)
+
+    # --------------------------------------------------------------
+    # download_exts: str  只允许下载的扩展名（逗号分隔，空=全部）
+    # --------------------------------------------------------------
+    @property
+    def download_exts(self) -> str:
+        try:
+            v = self._settings.value("download_exts", DEFAULT_DOWNLOAD_EXTS)
+        except Exception:
+            v = DEFAULT_DOWNLOAD_EXTS
+        return str(v or "")
+
+    @download_exts.setter
+    def download_exts(self, value) -> None:
+        self._set("download_exts", str(value or ""))
 
     # --------------------------------------------------------------
     # stealth_enabled: bool  反爬对抗（特征伪装 + 延迟抖动）

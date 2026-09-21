@@ -3,6 +3,7 @@
 
 import os
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QSplitter, QMessageBox, QDialog,
 )
@@ -30,7 +31,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"{APP_TITLE}  v{APP_VERSION}")
-        self.resize(1560, 940)
+        self._apply_initial_size()
 
         self.signals = get_signals()
         self.prefs   = UserPrefs()
@@ -41,6 +42,7 @@ class MainWindow(QMainWindow):
             popup_strategy=self.prefs.popup_strategy,
             stealth_enabled=self.prefs.stealth_enabled,
             max_download_mb=self.prefs.max_download_mb,
+            allowed_download_exts=self.prefs.download_exts,
         )
         self.cookie_manager = CookieManager(self.browser.profile, self)
         # Profile=cookie 集：绑定当前 profile 名，并载入其已保存的 cookie
@@ -68,6 +70,30 @@ class MainWindow(QMainWindow):
                  f"弹窗策略='{self.prefs.popup_strategy}' · "
                  f"反爬伪装={'开' if self.browser.stealth_enabled else '关'}")
         self.signals.log.emit("INFO", "就绪。输入网址并加载，选择抓取格式，然后开始抓取。")
+
+    # ==================================================================
+    # 窗口尺寸
+    # ==================================================================
+    def _apply_initial_size(self) -> None:
+        """按可用屏幕自适应初始尺寸，避免默认窗口高过屏幕、底部看不到。
+
+        同时设置最小尺寸，防止窗口过小把控件挤在一起
+        （左侧配置面板已改为可滚动，内容不会因此丢失）。
+        """
+        self.setMinimumSize(1000, 620)
+        try:
+            screen = QGuiApplication.primaryScreen()
+            if screen is not None:
+                avail = screen.availableGeometry()
+                w = min(1560, max(1000, int(avail.width() * 0.90)))
+                h = min(940, max(620, int(avail.height() * 0.90)))
+                self.resize(w, h)
+                log_info(f"[ui] 初始窗口 {w}x{h}（可用屏幕 "
+                         f"{avail.width()}x{avail.height()}）")
+                return
+        except Exception:
+            pass
+        self.resize(1280, 800)
 
     # ==================================================================
     # UI 组装
@@ -195,18 +221,25 @@ class MainWindow(QMainWindow):
             log_info("[ui] 检测关键词已更新")
 
     def _on_run_settings(self):
-        """反爬伪装 / 下载上限变化：同步到浏览器并持久化。"""
+        """反爬伪装 / 下载上限 / 下载格式变化：同步到浏览器并持久化。"""
         stealth = self.left_panel.stealth_enabled()
         limit = self.left_panel.max_download_mb()
+        exts = self.left_panel.download_exts()
+
         self.prefs.stealth_enabled = stealth
         self.prefs.max_download_mb = limit
+        self.prefs.download_exts = exts
+
         self.browser.stealth_enabled = stealth
         self.browser.max_download_mb = limit
+        self.browser.allowed_download_exts = exts
+
+        size_txt = f"{limit} MB" if limit else "不限大小"
+        ext_txt = exts if exts else "不限格式"
         self.signals.log.emit(
             "INFO",
             f"运行设置已更新：反爬伪装 {'开' if stealth else '关'}，"
-            f"下载上限 {limit} MB" if limit else
-            f"运行设置已更新：反爬伪装 {'开' if stealth else '关'}，下载不限大小")
+            f"下载上限 {size_txt}，下载格式 {ext_txt}")
 
     # ------------------------------------------------------------------
     def _on_log(self, level: str, msg: str):

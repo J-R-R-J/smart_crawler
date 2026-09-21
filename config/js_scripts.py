@@ -47,13 +47,86 @@ def _inject(template: str, **values) -> str:
 # 目的：消除「自动化浏览器」的明显指纹，降低被风控直接拦截的概率。
 # 仅做常规浏览器特征对齐，**不包含**验证码识别或绕过逻辑——
 # 遇到验证码仍交由人工处理（见 core/crawler 的人机协作流程）。
+#
+# 覆盖的检测面：
+#   1. navigator.webdriver（含原型链层面，避免留下 own property 痕迹）
+#   2. 经典自动化框架残留标记（__webdriver_*、_selenium、cdc_*、domAutomation 等）
+#   3. 语言 / 平台 / 硬件信息 / 插件 / window.chrome 一致性
+#   4. Permissions 查询结果、WebGL 厂商与渲染器字符串
+#   5. 无头 / 软件渲染常见特征（outerWidth 为 0、document.hasFocus 恒 false 等）
+#
+# 说明：QtWebEngine 使用自有 IPC，**不暴露 CDP（Chrome DevTools Protocol）**，
+# 因此 $cdc_ / Runtime.enable 这类纯 CDP 痕迹通常不存在；这里仍做清理以防万一。
 # ---------------------------------------------------------------------------
 STEALTH_JS = r"""
 (function(){
+    'use strict';
+    var UNDEF = void 0;
+
+    // ---- 1. navigator.webdriver：优先从原型上删除，避免留下 own property ----
     try {
-        Object.defineProperty(navigator, 'webdriver', { get: function(){ return undefined; } });
+        var navProto = Object.getPrototypeOf(navigator);
+        if (navProto) {
+            try { delete navProto.webdriver; } catch (e) {}
+            if ('webdriver' in navigator) {
+                Object.defineProperty(navProto, 'webdriver', {
+                    get: function(){ return UNDEF; },
+                    configurable: true
+                });
+            }
+        }
+        // 兜底：万一还在实例上
+        if (navigator.webdriver !== UNDEF) {
+            try { delete navigator.webdriver; } catch (e) {}
+        }
     } catch (e) {}
 
+    // ---- 2. 清理自动化框架残留标记 ----
+    try {
+        var MARKERS = [
+            // ChromeDriver
+            'cdc_adoQpoasnfa76pfcZLmcfl_Array',
+            'cdc_adoQpoasnfa76pfcZLmcfl_Promise',
+            'cdc_adoQpoasnfa76pfcZLmcfl_Symbol',
+            // Selenium / WebDriver
+            '__webdriver_evaluate', '__selenium_evaluate',
+            '__webdriver_script_function', '__webdriver_script_func',
+            '__webdriver_script_fn', '__fxdriver_evaluate',
+            '__driver_evaluate', '__driver_unwrapped',
+            '__webdriver_unwrapped', '__selenium_unwrapped',
+            '__fxdriver_unwrapped', '_Selenium_IDE_Recorder',
+            '_selenium', 'calledSelenium', '_WEBDRIVER_ELEM_CACHE',
+            // PhantomJS / Nightmare / Playwright / Puppeteer
+            '__nightmare', '_phantom', 'callPhantom',
+            '__playwright', '__puppeteer', '__pw_manual', '__PW_inspect',
+            // 老式自动化桥
+            'domAutomation', 'domAutomationController', 'spawn'
+        ];
+        for (var i = 0; i < MARKERS.length; i++) {
+            var k = MARKERS[i];
+            try { if (k in window) { delete window[k]; } } catch (e) {}
+            try { if (k in document) { delete document[k]; } } catch (e) {}
+        }
+        // ChromeDriver 会在 document 上挂 $cdc_ 前缀属性
+        try {
+            var dkeys = Object.getOwnPropertyNames(document);
+            for (var j = 0; j < dkeys.length; j++) {
+                if (/^\$?cdc_|^\$?wdc_/i.test(dkeys[j])) {
+                    try { delete document[dkeys[j]]; } catch (e) {}
+                }
+            }
+        } catch (e) {}
+        try {
+            var wkeys = Object.getOwnPropertyNames(window);
+            for (var m = 0; m < wkeys.length; m++) {
+                if (/^\$?cdc_|^\$?wdc_/i.test(wkeys[m])) {
+                    try { delete window[wkeys[m]]; } catch (e) {}
+                }
+            }
+        } catch (e) {}
+    } catch (e) {}
+
+    // ---- 3. 语言 / 时区一致性 ----
     try {
         Object.defineProperty(navigator, 'languages', {
             get: function(){ return ['zh-CN', 'zh', 'en-US', 'en']; }
@@ -63,19 +136,26 @@ STEALTH_JS = r"""
         });
     } catch (e) {}
 
+    // ---- 4. 平台与硬件信息（避免无头环境的空值/异常值） ----
     try {
         Object.defineProperty(navigator, 'platform', { get: function(){ return 'Win32'; } });
         Object.defineProperty(navigator, 'hardwareConcurrency', { get: function(){ return 8; } });
         Object.defineProperty(navigator, 'deviceMemory', { get: function(){ return 8; } });
         Object.defineProperty(navigator, 'maxTouchPoints', { get: function(){ return 0; } });
+        Object.defineProperty(navigator, 'vendor', { get: function(){ return 'Google Inc.'; } });
+        Object.defineProperty(navigator, 'vendorSub', { get: function(){ return ''; } });
+        Object.defineProperty(navigator, 'productSub', { get: function(){ return '20030107'; } });
     } catch (e) {}
 
+    // ---- 5. plugins / mimeTypes（空列表是无头浏览器的典型特征） ----
     try {
         if (!navigator.plugins || navigator.plugins.length === 0) {
             var fakePlugins = [
                 { name: 'PDF Viewer', filename: 'internal-pdf-viewer' },
                 { name: 'Chrome PDF Viewer', filename: 'internal-pdf-viewer' },
-                { name: 'Chromium PDF Viewer', filename: 'internal-pdf-viewer' }
+                { name: 'Chromium PDF Viewer', filename: 'internal-pdf-viewer' },
+                { name: 'Microsoft Edge PDF Viewer', filename: 'internal-pdf-viewer' },
+                { name: 'WebKit built-in PDF', filename: 'internal-pdf-viewer' }
             ];
             fakePlugins.item = function(i){ return this[i]; };
             fakePlugins.namedItem = function(n){
@@ -84,34 +164,142 @@ STEALTH_JS = r"""
                 }
                 return null;
             };
-            Object.defineProperty(navigator, 'plugins', { get: function(){ return fakePlugins; } });
+            Object.defineProperty(navigator, 'plugins', {
+                get: function(){ return fakePlugins; }, configurable: true
+            });
+            var fakeMimes = [
+                { type: 'application/pdf', suffixes: 'pdf', description: 'Portable Document Format' },
+                { type: 'text/pdf', suffixes: 'pdf', description: 'Portable Document Format' }
+            ];
+            fakeMimes.item = function(i){ return this[i]; };
+            fakeMimes.namedItem = function(n){
+                for (var i = 0; i < this.length; i++) {
+                    if (this[i].type === n) { return this[i]; }
+                }
+                return null;
+            };
+            Object.defineProperty(navigator, 'mimeTypes', {
+                get: function(){ return fakeMimes; }, configurable: true
+            });
         }
     } catch (e) {}
 
+    // ---- 6. window.chrome（部分站点会直接检查） ----
     try {
         if (!window.chrome) { window.chrome = {}; }
         if (!window.chrome.runtime) { window.chrome.runtime = {}; }
+        if (!window.chrome.app) {
+            window.chrome.app = {
+                isInstalled: false,
+                InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' },
+                RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' }
+            };
+        }
+        if (!window.chrome.csi) {
+            window.chrome.csi = function(){
+                return { onloadT: Date.now(), startE: Date.now(), pageT: 1000, tran: 15 };
+            };
+        }
+        if (!window.chrome.loadTimes) {
+            window.chrome.loadTimes = function(){
+                var t = Date.now() / 1000;
+                return {
+                    requestTime: t, startLoadTime: t, commitLoadTime: t,
+                    finishDocumentLoadTime: t, finishLoadTime: t,
+                    firstPaintTime: t, firstPaintAfterLoadTime: 0,
+                    navigationType: 'Other', wasFetchedViaSpdy: true,
+                    wasNpnNegotiated: true, npnNegotiatedProtocol: 'h2',
+                    wasAlternateProtocolAvailable: false, connectionInfo: 'h2'
+                };
+            };
+        }
     } catch (e) {}
 
+    // ---- 7. Permissions 查询结果与 Notification 保持一致 ----
     try {
         if (navigator.permissions && navigator.permissions.query) {
             var origQuery = navigator.permissions.query.bind(navigator.permissions);
             navigator.permissions.query = function(params){
                 if (params && params.name === 'notifications') {
-                    return Promise.resolve({ state: Notification.permission });
+                    return Promise.resolve({ state: Notification.permission, onchange: null });
                 }
                 return origQuery(params);
             };
         }
     } catch (e) {}
 
+    // ---- 8. WebGL 厂商 / 渲染器（软件渲染会暴露 SwiftShader 等特征） ----
     try {
-        var getParam = WebGLRenderingContext.prototype.getParameter;
-        WebGLRenderingContext.prototype.getParameter = function(p){
-            if (p === 37445) { return 'Intel Inc.'; }
-            if (p === 37446) { return 'Intel Iris OpenGL Engine'; }
-            return getParam.apply(this, arguments);
-        };
+        var VENDOR = 37445, RENDERER = 37446;
+        function patchGL(proto){
+            if (!proto || !proto.getParameter) { return; }
+            var orig = proto.getParameter;
+            proto.getParameter = function(p){
+                if (p === VENDOR) { return 'Intel Inc.'; }
+                if (p === RENDERER) { return 'Intel Iris OpenGL Engine'; }
+                return orig.apply(this, arguments);
+            };
+        }
+        patchGL(window.WebGLRenderingContext && WebGLRenderingContext.prototype);
+        patchGL(window.WebGL2RenderingContext && WebGL2RenderingContext.prototype);
+        if (window.WebGLRenderingContext && WebGLRenderingContext.prototype.getExtension) {
+            var origGetExt = WebGLRenderingContext.prototype.getExtension;
+            WebGLRenderingContext.prototype.getExtension = function(name){
+                var ext = origGetExt.apply(this, arguments);
+                if (ext && name === 'WEBGL_debug_renderer_info') {
+                    // 调试扩展本身保留，但值已被上面的 getParameter 覆盖
+                    return ext;
+                }
+                return ext;
+            };
+        }
+    } catch (e) {}
+
+    // ---- 9. 无头/软件渲染常见特征 ----
+    try {
+        // outerWidth/outerHeight 为 0 是无头环境的典型特征
+        if (!window.outerWidth || !window.outerHeight) {
+            Object.defineProperty(window, 'outerWidth', {
+                get: function(){ return window.innerWidth || 1280; }, configurable: true });
+            Object.defineProperty(window, 'outerHeight', {
+                get: function(){ return (window.innerHeight || 800) + 90; }, configurable: true });
+        }
+        // 无头环境下 hasFocus 常恒为 false
+        if (document.hasFocus && !document.hasFocus()) {
+            document.hasFocus = function(){ return true; };
+        }
+    } catch (e) {}
+
+    // ---- 10. 网络信息对象（缺失也是特征之一） ----
+    try {
+        if (!navigator.connection) {
+            Object.defineProperty(navigator, 'connection', {
+                get: function(){
+                    return { effectiveType: '4g', rtt: 50, downlink: 10,
+                             saveData: false, onchange: null };
+                },
+                configurable: true
+            });
+        }
+    } catch (e) {}
+
+    // ---- 11. 自检：关键现代 API 是否存在（Chromium 应全部具备） ----
+    try {
+        var REQUIRED = ['fetch', 'Promise', 'Intl', 'Proxy', 'Reflect',
+                        'Symbol', 'Map', 'Set', 'WeakMap', 'WeakSet',
+                        'requestAnimationFrame', 'IntersectionObserver',
+                        'ResizeObserver', 'MutationObserver', 'URL',
+                        'URLSearchParams', 'AbortController', 'TextEncoder',
+                        'TextDecoder', 'queueMicrotask', 'structuredClone'];
+        var missing = [];
+        for (var n = 0; n < REQUIRED.length; n++) {
+            if (typeof window[REQUIRED[n]] === 'undefined') {
+                missing.push(REQUIRED[n]);
+            }
+        }
+        if (missing.length) {
+            window.__sc_missing_apis = missing;
+        }
     } catch (e) {}
 })();
 """

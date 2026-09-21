@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox,
     QListWidget, QListWidgetItem, QLineEdit, QPlainTextEdit,
     QSpinBox, QDoubleSpinBox, QCheckBox, QPushButton, QLabel,
+    QScrollArea, QFrame,
 )
 
 from config.default_settings import (
@@ -34,7 +35,23 @@ class LeftPanel(QWidget):
     # UI
     # ==================================================================
     def _build(self):
-        lay = QVBoxLayout(self)
+        # 外层只放一个滚动区：窗口再矮也能滚到全部配置，
+        # 最大化时也不会再把控件挤压变形。
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        outer.addWidget(self.scroll)
+
+        content = QWidget()
+        lay = QVBoxLayout(content)
         lay.setContentsMargins(0, 0, 6, 0)
         lay.setSpacing(8)
 
@@ -137,6 +154,13 @@ class LeftPanel(QWidget):
         self.download_spin.setToolTip("单个文件下载大小上限，0 表示不限制")
         f2.addRow("下载上限：", self.download_spin)
 
+        self.download_exts_edit = QLineEdit()
+        self.download_exts_edit.setPlaceholderText("留空＝不限，如 pdf,csv,xlsx,zip")
+        self.download_exts_edit.setToolTip(
+            "只允许下载这些扩展名的文件（英文逗号分隔，不区分大小写）。\n"
+            "留空表示允许全部。用于拦截站点的广告、安装包等非目标文件。")
+        f2.addRow("下载格式：", self.download_exts_edit)
+
         lay.addWidget(g2)
 
         # ---------- ③ 执行 ----------
@@ -161,6 +185,9 @@ class LeftPanel(QWidget):
         lay.addWidget(g3)
         lay.addStretch(1)
 
+        # 把内容挂到滚动区（QScrollArea 接管所有权）
+        self.scroll.setWidget(content)
+
         # 信号
         self.btn_start.clicked.connect(self.start_clicked)
         self.btn_stop.clicked.connect(self.stop_clicked)
@@ -171,11 +198,13 @@ class LeftPanel(QWidget):
         self.stealth_chk.toggled.connect(lambda _v: self.settings_changed.emit())
         self.download_spin.valueChanged.connect(
             lambda _v: self.settings_changed.emit())
+        self.download_exts_edit.textChanged.connect(
+            lambda _t: self.settings_changed.emit())
 
         self._update_hints()
 
     # ==================================================================
-    # 运行设置（反爬 / 下载上限）
+    # 运行设置（反爬 / 下载）
     # ==================================================================
     def stealth_enabled(self) -> bool:
         return self.stealth_chk.isChecked()
@@ -183,12 +212,19 @@ class LeftPanel(QWidget):
     def max_download_mb(self) -> int:
         return int(self.download_spin.value())
 
-    def set_run_settings(self, stealth: bool, max_download_mb: int) -> None:
-        for w in (self.stealth_chk, self.download_spin):
+    def download_exts(self) -> str:
+        return self.download_exts_edit.text().strip()
+
+    def set_run_settings(self, stealth: bool, max_download_mb: int,
+                         download_exts: str = "") -> None:
+        widgets = (self.stealth_chk, self.download_spin,
+                   self.download_exts_edit)
+        for w in widgets:
             w.blockSignals(True)
         self.stealth_chk.setChecked(bool(stealth))
         self.download_spin.setValue(int(max_download_mb or 0))
-        for w in (self.stealth_chk, self.download_spin):
+        self.download_exts_edit.setText(str(download_exts or ""))
+        for w in widgets:
             w.blockSignals(False)
 
     # ==================================================================
@@ -247,7 +283,8 @@ class LeftPanel(QWidget):
         self.delay_spin.setValue(p.last_delay)
         self.max_pages_spin.setValue(p.last_max_pages)
         self.autoscroll_chk.setChecked(p.last_autoscroll)
-        self.set_run_settings(p.stealth_enabled, p.max_download_mb)
+        self.set_run_settings(p.stealth_enabled, p.max_download_mb,
+                              p.download_exts)
 
     # ------------------------------------------------------------------
     def collect_task(self) -> Task:

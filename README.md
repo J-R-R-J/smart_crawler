@@ -1,6 +1,6 @@
 # SmartCrawler 智能可视化爬虫
 
-![Version](https://img.shields.io/badge/version-0.0.2-blue)
+![Version](https://img.shields.io/badge/version-0.0.3-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![PySide6](https://img.shields.io/badge/PySide6-6.6%2B-green)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -12,7 +12,7 @@
 
 适用于需要登录态、需要人工过验证、页面结构不规整的中小规模采集场景。
 
-当前版本 **v0.0.2**，更新内容见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **v0.0.3**，更新内容见 [CHANGELOG.md](CHANGELOG.md)。
 
 ![界面截图](docs/screenshot.png)
 
@@ -25,6 +25,7 @@
 - [环境要求](#环境要求)
 - [安装](#安装)
 - [快速开始](#快速开始)
+- [命令行参数](#命令行参数)
 - [抓取格式一览](#抓取格式一览)
 - [反爬检测与人机协作](#反爬检测与人机协作)
 - [反爬对抗机制](#反爬对抗机制)
@@ -45,33 +46,42 @@
 
 ## 下载
 
-### 方式一：下载发布压缩包（推荐）
+### 方式一：下载免安装版（推荐给普通用户）
 
 前往 **[Releases 页面](https://github.com/J-R-R-J/smart_crawler/releases/latest)**，
-在 **Assets** 区域下载 `smart_crawler-v0.0.2.zip`：
+在 **Assets** 区域下载 **`SmartCrawler-v0.0.3-win64.zip`**：
 
 | 项目 | 说明 |
 | --- | --- |
-| 文件名 | `smart_crawler-v0.0.2.zip` |
-| 大小 | 约 160 KB |
+| 文件名 | `SmartCrawler-v0.0.3-win64.zip` |
+| 适用 | Windows 10/11 64 位 |
+| 内容 | 解压即用的程序目录，**自带 Python 运行时与 PySide6**，无需安装任何依赖 |
+| 使用 | 解压到任意目录 → 双击 `SmartCrawler.exe` |
+
+> 首次启动较慢（浏览器内核需要初始化），属正常现象。
+> 运行时数据写在程序目录下的 `crawler_data\`，删除该目录即可彻底重置。
+
+### 方式二：下载源码包
+
+在 **Assets** 区域下载 `smart_crawler-v0.0.3.zip`，或使用 GitHub 自动生成的
+**Source code**（`zip` / `tar.gz`）：
+
+| 项目 | 说明 |
+| --- | --- |
+| 文件名 | `smart_crawler-v0.0.3.zip` |
+| 大小 | 约 180 KB |
 | 内容 | 完整源码（配置 / 核心 / 界面 / 工具 / 测试 / 文档），**不含**虚拟环境与运行时数据 |
 
-解压后直接进入「[安装](#安装)」章节装依赖即可。
+解压后按「[安装](#安装)」章节装依赖，再运行 `python main.py`。
 
-### 方式二：克隆仓库
+### 方式三：克隆仓库
 
 ```bash
 git clone https://github.com/J-R-R-J/smart_crawler.git
 cd smart_crawler
 ```
 
-### 方式三：下载源码包
-
-在 [Releases 页面](https://github.com/J-R-R-J/smart_crawler/releases/latest) 的
-**Source code** 区域可选择 `zip` 或 `tar.gz`（由 GitHub 自动生成，
-不包含 Release 附件中的额外说明文件）。
-
-> 无论哪种方式，都需要本机已安装 **Python 3.10+**，并按「安装」章节安装 PySide6 依赖。
+> 免安装版与源码版功能完全一致；源码版需要本机 **Python 3.10+**。
 
 ---
 
@@ -90,14 +100,15 @@ cd smart_crawler
 | 18 种抓取格式 | 覆盖结构化记录、表格、链接、图片、正则、JSON-LD 等常见需求，可扩展 |
 | 多格式复选 | 一次勾选多种格式同时提取并合并结果，每条记录带 `_mode` 标记来源 |
 | 弹窗处理 | 三种策略可选：只报告 / 点击关闭按钮 / 直接移除 DOM，处理多轮弹窗 |
-| 反爬对抗 | 浏览器特征伪装 + 每页延迟随机抖动，降低被风控直接拦截的概率 |
+| 反爬对抗 | 自动化标志与框架残留标记清理、硬件/插件/WebGL 一致性伪装、每页延迟随机抖动 |
 | Cookie 管理 | 表格化查看、编辑、删除、清空、导入、导出，支持会话标记显示 |
 | 多 Profile | 不同站点使用不同身份，登录态互相隔离，可新建 / 删除 / 设为默认 |
 | 自动翻页 | 支持自定义「下一页」选择器与最大页数，翻页失败有兜底逻辑 |
 | 懒加载滚动 | 可选自动滚动触发懒加载，适配无限滚动页面 |
 | 结果导出 | CSV（UTF-8 BOM，Excel 可直接打开）与 JSON；导出目录可自定义并记忆 |
-| 下载限制 | 可设置单个文件的下载大小上限，超限自动拒绝或中断 |
+| 下载控制 | 可限制单个文件大小上限，并可用扩展名白名单只放行指定格式 |
 | 临时文件清理 | 一键清理引擎缓存、`__pycache__` 与临时日志，不影响 Profile 与 Cookie |
+| 自适应界面 | 窗口按屏幕自适应尺寸，左侧配置面板可滚动，小屏与最大化下都不会挤压控件 |
 | 日志落盘 | 按天生成日志文件，单文件 5 MB 轮转，保留 3 份历史 |
 | 单进程渲染 | 默认单进程软渲染，在容器 / 无 GPU / 远程桌面 / CI 环境下也能稳定运行 |
 
@@ -218,6 +229,10 @@ python main.py
 - **自动滚动触发懒加载**：适合无限滚动页面
 - **启用反爬特征伪装**：默认开启，隐藏自动化浏览器特征并让延迟随机抖动
 - **下载上限**：单个文件的下载大小上限（MB），0 表示不限制
+- **下载格式**：只放行指定扩展名（如 `pdf,csv,xlsx`），留空表示不限
+
+> 左侧面板内容较长，**已做成可滚动**：窗口再矮也能滚到全部配置。
+> 窗口初始尺寸会按你的屏幕自适应，不会默认高过屏幕。
 
 ### 第 6 步：开始抓取
 
@@ -233,6 +248,36 @@ python main.py
 
 导出目录默认为 `crawler_data/exports/`，也可以点 **导出目录…** 指定自定义目录，程序会记住它
 （下次导出默认用该目录，并在实际保存后自动记忆你最后选择的目录）。
+
+---
+
+## 命令行参数
+
+| 参数 | 作用 |
+| --- | --- |
+| （无） | 启动图形界面 |
+| `--version`（或 `-v`） | 打印版本号后退出，不启动界面 |
+| `--selftest` | 导入全部模块并自检后退出，用于验证安装或打包是否完整 |
+
+```bash
+python main.py --version
+python main.py --selftest
+```
+
+`--selftest` 的输出示例：
+
+```
+SmartCrawler selftest  version=0.0.3
+frozen=False  base_dir=J:\...\smart_crawler
+data_dir=J:\...\smart_crawler\crawler_data
+PySide6 6.9.3  QtWebEngine/QtWebChannel/QtPrintSupport OK
+modules: 30 ok, 0 failed
+SELFTEST RESULT: OK
+```
+
+> 免安装版（无控制台窗口）运行 `--selftest` 时看不到控制台输出，
+> 结果会同时写入 `crawler_data\logs\`，用记事本打开即可查看。
+> 退出码 `0` 表示自检通过。
 
 ---
 
@@ -353,28 +398,79 @@ python main.py
 
 ## 反爬对抗机制
 
-程序内置两类常规的对抗措施，默认开启，可在左侧面板关闭：
+程序内置三类常规的对抗措施，默认开启，可在左侧面板关闭：
 
 | 措施 | 实现 | 作用 |
 | --- | --- | --- |
 | 浏览器特征伪装 | 页面脚本执行前注入 `STEALTH_JS` | 消除自动化浏览器的明显指纹 |
+| 启动参数对齐 | `--disable-blink-features=AutomationControlled` | 让 Chromium **从源头**不设置 `navigator.webdriver` |
 | 拟人化延迟抖动 | 每页延迟在设定值上下 **±30%** 随机浮动 | 固定间隔是最容易被识别的自动化特征之一 |
 
-浏览器特征伪装具体处理以下项目：
+### 特征伪装覆盖的检测面
 
-- `navigator.webdriver` → `undefined`（最常被检测的自动化标志）
-- `navigator.languages` / `navigator.language` → 与中文环境一致
-- `navigator.platform` / `hardwareConcurrency` / `deviceMemory` / `maxTouchPoints` → 填成常见桌面值
-- `navigator.plugins` → 空列表是无头浏览器的典型特征，补上常见插件
-- `window.chrome` → 补齐部分站点会检查的对象
-- `navigator.permissions.query` → 与 Notification 状态保持一致
-- WebGL 的 `UNMASKED_VENDOR_WEBGL` / `UNMASKED_RENDERER_WEBGL` → 伪装成常见显卡
+**① 自动化标志**
 
-此外还会设置接近真实桌面的 User-Agent，并使用持久化 Profile 累积正常访问痕迹。
+| 项目 | 处理方式 |
+| --- | --- |
+| `navigator.webdriver` | 从 `Navigator.prototype` 上 `delete`，使其彻底不存在（`'webdriver' in navigator` 为 `false`），避免留下 own property 痕迹 |
+| `window.chrome` | 补齐 `runtime` / `app` / `csi` / `loadTimes`，部分站点会直接检查 |
+| `navigator.permissions.query` | `notifications` 查询结果与 `Notification.permission` 保持一致 |
+
+**② 自动化框架残留标记**
+
+批量清理以下已知标记（`window` 与 `document` 上都会扫描）：
+
+- Selenium / WebDriver：`__webdriver_evaluate`、`__selenium_evaluate`、`__driver_evaluate`、`__fxdriver_evaluate`、`_Selenium_IDE_Recorder`、`_selenium`、`calledSelenium` 等
+- ChromeDriver：`cdc_*` 前缀属性（动态扫描 `$cdc_` / `$wdc_` 模式）
+- PhantomJS / Nightmare / Playwright / Puppeteer：`callPhantom`、`__nightmare`、`__playwright`、`__puppeteer` 等
+- 老式自动化桥：`domAutomation`、`domAutomationController`
+
+**③ 环境一致性**
+
+| 项目 | 伪装值 / 处理 |
+| --- | --- |
+| `navigator.languages` / `language` | `zh-CN,zh,en-US,en` / `zh-CN` |
+| `navigator.platform` / `vendor` | `Win32` / `Google Inc.` |
+| `hardwareConcurrency` / `deviceMemory` / `maxTouchPoints` | `8` / `8` / `0` |
+| `navigator.plugins` / `mimeTypes` | 空列表是无头浏览器的典型特征，补上 PDF 插件与 `application/pdf` |
+| WebGL 厂商 / 渲染器 | `Intel Inc.` / `Intel Iris OpenGL Engine`（覆盖软件渲染暴露的 SwiftShader 特征），WebGL 与 WebGL2 均处理 |
+| `window.outerWidth` / `outerHeight` | 为 0 是无头环境特征，兜底为窗口内尺寸 |
+| `document.hasFocus()` | 无头下常恒为 `false`，兜底为 `true` |
+| `navigator.connection` | 缺失本身是特征，补上 `4g` 网络信息 |
+
+**④ JS API 完整性**
+
+QtWebEngine 基于完整 Chromium，`fetch`、`Promise`、`Intl`、`Proxy`、`ResizeObserver`、
+`AbortController`、`structuredClone` 等现代 API **全部原生可用**（不像某些精简内核会缺失）。
+`STEALTH_JS` 结尾仍会自检一遍，若有缺失会写入 `window.__sc_missing_apis` 便于排查。
+
+### User-Agent
+
+默认使用**纯正的桌面 Chrome UA**，不追加任何自定义标识 —— UA 后缀是最好用的指纹之一，
+带上工具名等于自报「我是自动化程序」，会让其他伪装全部失效。
+
+如果你希望在被采集站点上保持可识别性（更透明的做法），可以设置环境变量追加：
+
+```bat
+set SMARTCRAWLER_UA_SUFFIX=MyBot/1.0
+python main.py
+```
+
+### 自检工具
+
+```bash
+.venv\Scripts\python.exe tools\probe_stealth.py
+```
+
+会逐项打印上述指纹的实际取值，并标出与期望不符的项。在无头 / offscreen 环境下
+WebGL 相关项会显示 `no-webgl`（没有 GPU 上下文），属环境限制，真实桌面会返回伪装值。
 
 > **边界说明**：以上都是让自动化浏览器「看起来更像真人浏览器」的常规手段，
 > **不包含**任何验证码识别或绕过逻辑。遇到验证码仍然按上面的流程交由人工处理——
 > 这既是刻意设计，也更稳定可靠。
+>
+> 另需了解：QtWebEngine 使用自有 IPC，**不暴露 CDP（Chrome DevTools Protocol）**，
+> 因此 `$cdc_`、`Runtime.enable` 这类纯 CDP 痕迹通常本就不存在，程序仍会做清理以防万一。
 
 ---
 
@@ -455,15 +551,30 @@ QtWebEngine 在单进程渲染模式下**只允许存在一个浏览器引擎实
 
 ## 下载限制与临时文件清理
 
+网页触发的文件下载会归档到 `crawler_data/downloads/`，可通过两道关卡控制：
+
+### 下载格式白名单
+
+在左侧面板 **下载格式** 中填写允许的扩展名（英文逗号分隔，不区分大小写）：
+
+| 填写值 | 效果 |
+| --- | --- |
+| 留空 | 允许全部格式 |
+| `pdf,csv,xlsx` | 只放行这三种，其余一律拒绝 |
+| `pdf，docx` | 全角逗号也可识别；前导点与 `*` 会被自动清理（`.PDF` = `pdf`） |
+
+这是针对「点下载按钮却下到广告程序 / 安装包」的常见情况：
+把白名单设成你真正需要的格式，非目标文件在**发起阶段就被取消**，不会落盘。
+
 ### 下载大小限制
 
-网页触发的文件下载会归档到 `crawler_data/downloads/`，并可设置大小上限：
+在左侧面板 **下载上限** 中设置（单位 MB，`0` 表示不限制）：
 
-- 上限在左侧面板 **下载上限** 中设置（单位 MB，`0` 表示不限制）
 - 若服务器在开始时就返回文件总大小，超限的直接拒绝，不产生任何下载
 - 若服务器未返回总大小，则在下载过程中按已接收字节实时监控，超限即刻中断
 
-被拒绝或被中断的下载会写入日志（文件日志 + 日志标签页）。
+两道关卡（格式 + 大小）任一不通过都会取消下载，并同时写入文件日志与日志标签页，
+方便回溯是哪个文件、因为什么原因被拦下。
 
 ### 一键清理临时文件
 
@@ -740,10 +851,10 @@ POPUP_CLOSE_SELECTORS.append(".my-site-close-btn")
 # 端到端测试：真实页面加载 + 翻页抓取 + Cookie + 元素拾取（9 项）
 .venv\Scripts\python.exe tests\test_e2e.py
 
-# 功能覆盖测试：18 种格式 + 弹窗三策略 + 结构化确认 + 检测增强 + 关键词 + 清理（54 项）
+# 功能覆盖测试：18 种格式 + 弹窗三策略 + 结构化确认 + 检测增强 + 关键词 + 下载白名单 + 清理（64 项）
 .venv\Scripts\python.exe tests\test_feature.py
 
-# 界面交互测试：导航、多格式复选、停止复位、跳过按钮、各面板操作、全局信号（59 项）
+# 界面交互测试：导航、多格式复选、滚动面板、窗口尺寸、停止复位、跳过按钮、各面板操作（64 项）
 .venv\Scripts\python.exe tests\test_ui.py
 ```
 
@@ -754,9 +865,17 @@ Linux / macOS 使用 `python tests/test_smoke.py` 等形式即可。
 ```
 test_smoke.py    : 46 passed, 0 failed
 test_e2e.py      :  9 passed, 0 failed
-test_feature.py  : 54 passed, 0 failed
-test_ui.py       : 59 passed, 0 failed
-合计             : 168 passed, 0 failed
+test_feature.py  : 64 passed, 0 failed
+test_ui.py       : 64 passed, 0 failed
+合计             : 183 passed, 0 failed
+```
+
+此外 `tests/test_packaging.py` 校验打包属性与版本号的一致性（18 项）：
+该文件依赖本机维护的 `packaging/` 目录，目录不存在时会**自动跳过**，
+因此在 CI 或协作者机器上不会误报失败。
+
+```bash
+.venv\Scripts\python.exe tests\test_packaging.py
 ```
 
 测试使用 `--single-process` 单进程渲染，因此可在无 GPU、无桌面（offscreen）环境中运行，
@@ -818,6 +937,39 @@ export QTWEBENGINE_DISABLE_SANDBOX=1
 因为单进程渲染模式下 QtWebEngine 只允许一个引擎实例，创建第二个会导致进程崩溃。
 因此 Profile 以「Cookie 集」形式实现，登录态隔离效果一致，详见
 [Profile 与 Cookie 管理](#profile-与-cookie-管理)。
+
+**Q：左侧面板内容看不全 / 最大化后控件挤在一起？**
+
+左侧面板已改为**可滚动**：面板右侧会出现滚动条，滚下去即可看到全部配置。
+窗口初始尺寸也会按你的屏幕自适应（最多占可用区域的 90%），不会默认高过屏幕；
+同时设了最小尺寸 1000×620，防止窗口被拖得过小导致控件挤压。
+
+若你的屏幕较小、仍觉得挤，可以把窗口拉宽，或把中间浏览器区域的分隔条向左拖，
+给左侧面板留更多空间。
+
+**Q：程序会不会被网站识别出是爬虫工具？**
+
+默认不会带明显标识：
+
+- `navigator.webdriver` 已从原型链上删除（`'webdriver' in navigator` 为 `false`）
+- 启动参数加了 `--disable-blink-features=AutomationControlled`，从源头不设置该标志
+- User-Agent 是**纯正的桌面 Chrome UA**，不追加任何工具名
+- 自动化框架的经典残留标记会被批量清理
+
+想自查可以运行 `tools\probe_stealth.py`，它会逐项打印实际指纹值。
+
+反过来说，如果你**希望**在站点上保持可识别性（更透明），设置环境变量即可：
+
+```bat
+set SMARTCRAWLER_UA_SUFFIX=MyBot/1.0
+```
+
+**Q：下载总是被拒绝？**
+
+先看日志标签页里的原因，通常是两道关卡之一：
+
+1. **格式不允许** —— 检查左侧 **下载格式** 是否填了白名单；留空表示不限
+2. **超出大小上限** —— 检查左侧 **下载上限**；`0` 表示不限
 
 **Q：某些站点一直卡在验证？**
 
@@ -920,11 +1072,22 @@ export QTWEBENGINE_DISABLE_SANDBOX=1
 
 ## 版本与更新日志
 
-当前版本：**v0.0.2**（2026-09-18）
+当前版本：**v0.0.3**（2026-09-20）
 
-版本号同时显示在窗口标题与启动日志中，便于排查问题时确认版本。
+版本号只有一个源头：`config/constants.py` 的 `APP_VERSION`，窗口标题、启动日志、
+打包属性文件都由它派生。
 
-完整变更记录见 [CHANGELOG.md](CHANGELOG.md)，其中 v0.0.2 的主要变化：
+完整变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+
+### v0.0.3
+
+- 新增**下载格式白名单**（只放行指定扩展名）、左侧面板**可滚动**、窗口尺寸**自适应**
+- **反检测加固**：`navigator.webdriver` 从原型链彻底移除、启动参数从源头关闭自动化标志、
+  批量清理自动化框架残留标记、补齐无头环境特征
+- **User-Agent 不再带工具标识**（原先等于自报自动化身份）
+- `tools/probe_stealth.py` 升级为完整指纹自检报告
+
+### v0.0.2
 
 - 新增多格式复选、自定义检测关键词、检测数据源扩展与抗混淆归一化
 - 新增验证码 / 登录墙的结构化确认，区分「已确认」与「疑似」，显著降低误判
@@ -932,8 +1095,35 @@ export QTWEBENGINE_DISABLE_SANDBOX=1
 - 新增反爬对抗（浏览器特征伪装 + 延迟抖动）、下载大小限制、临时文件清理
 - 修复导航按钮报错、停止后无法再次开始、用户偏好静默丢失、退出阶段崩溃等问题
 
+### 关于版本号
+
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)：`主版本.次版本.修订号`。
 本项目仍处于早期阶段（`0.x`），接口与界面可能在不另行通知的情况下调整。
+
+已发布的版本不会移动 tag；后续改动一律发新版本号。
+
+---
+
+## 从源码打包成 exe（可选）
+
+如果你希望得到免安装的 exe，可以在本机用 PyInstaller 自行打包：
+
+```bash
+pip install pyinstaller
+pyinstaller --noconfirm --clean --windowed --name SmartCrawler ^
+  --collect-all PySide6 main.py
+```
+
+> 上面的命令会打包**全部** PySide6（含 Qt3D、QtQuick、QtCharts 等本项目用不到的模块），
+> 产物体积明显偏大。若需要精简版本，只需保留这 7 个 Qt 模块：
+> `QtCore`、`QtGui`、`QtWidgets`、`QtNetwork`、`QtWebChannel`、
+> `QtWebEngineCore`、`QtWebEngineWidgets`，其余用 `--exclude-module` 排除，
+> 并剔除 `PySide6/resources/*.debug.pak`、`PySide6/qml/`、`PySide6/metatypes/`
+> 等非运行时文件。
+>
+> 注意：QtWebEngine 依赖 `QtWebEngineProcess.exe` 与 `resources/` 下的
+> `icudtl.dat`、`qtwebengine_resources*.pak`、`v8_context_snapshot.bin`，
+> 以及 `plugins/platforms/`（平台插件）与 `plugins/tls/`（HTTPS），这些**不能排除**。
 
 ---
 

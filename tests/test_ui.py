@@ -154,6 +154,20 @@ def main():
 
     # ================= 3. 左侧面板 =================
     lp = win.left_panel
+
+    # 滚动区：窗口再矮也能看到全部配置
+    check("left panel is scrollable",
+          lp.scroll is not None and lp.scroll.widget() is not None,
+          type(lp.scroll).__name__)
+    check("left panel widgetResizable", lp.scroll.widgetResizable() is True)
+    # 最小尺寸限制，避免控件被挤压
+    check("window minimum size set",
+          win.minimumWidth() >= 1000 and win.minimumHeight() >= 620,
+          f"{win.minimumWidth()}x{win.minimumHeight()}")
+    check("initial size fits screen",
+          win.width() >= 1000 and win.height() >= 620,
+          f"{win.width()}x{win.height()}")
+
     lp.fields_edit.setPlainText("标题 | .title | text |\n价格 | .price | text |")
     lp.selector_edit.setText(".item")
     lp.set_selected_modes(["records"])           # 单格式
@@ -183,15 +197,20 @@ def main():
     check("clear format selection", lp.selected_modes() == [])
     lp.set_selected_modes(["records"])
 
-    # 反爬 / 下载上限设置
+    # 反爬 / 下载设置
     lp.stealth_chk.setChecked(False)
     lp.download_spin.setValue(12)
+    lp.download_exts_edit.setText("pdf,csv")
     win._on_run_settings()
     check("run settings applied",
           win.browser.stealth_enabled is False
           and win.browser.max_download_mb == 12
           and win.prefs.max_download_mb == 12,
           f"stealth={win.browser.stealth_enabled} limit={win.browser.max_download_mb}")
+    check("download exts applied",
+          win.browser.allowed_download_exts == {"pdf", "csv"}
+          and win.prefs.download_exts == "pdf,csv",
+          f"{sorted(win.browser.allowed_download_exts)} / {win.prefs.download_exts!r}")
     lp.stealth_chk.setChecked(True)
     lp.download_spin.setValue(50)
     win._on_run_settings()
