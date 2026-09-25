@@ -71,7 +71,7 @@
 | 项目 | 说明 |
 | --- | --- |
 | 文件名 | `smart_crawler-v0.0.4.zip` |
-| 大小 | 约 180 KB |
+| 大小 | 约 203 KB |
 | 内容 | 完整源码（配置 / 核心 / 界面 / 工具 / 测试 / 文档），**不含**虚拟环境与运行时数据 |
 
 解压后按「[安装](#安装)」章节装依赖，再运行 `python main.py`。
@@ -626,12 +626,13 @@ Windows 上有**两条互不相干**的图标路径，很容易混为一谈：
 程序的实际取图顺序（见 `utils/appicon.py`）：
 
 1. `_internal\appicon.ico`（打包时随 `datas` 分发）
-2. 源码根目录 / `assets\` / `packaging\` 下的 `appicon.ico` 或 `.png`
+2. 源码根目录 / `assets\`（权威副本，随源码包分发）/ `packaging\`（本机备用）
+   下的 `appicon.ico` 或 `.png`
 3. exe 同级目录下的 `appicon.ico`
 4. 都没有 → 用 QPainter **现画**一个（矢量图形，不依赖字体）
 
 > 图标文件只有一张 256×256 时，标题栏要的 16×16 只能由系统缩放，会糊。
-> 所以 `packaging\appicon.ico` 里准备了 **16 / 32 / 48 / 64 / 256 五个原生尺寸**
+> 所以 `assets\appicon.ico` 里准备了 **16 / 32 / 48 / 64 / 256 五个原生尺寸**
 > （24 与 128 由 Windows 就近取用，都是**缩小**，不会放大糊掉）。
 > 重新生成用 `packaging\make_icon.py`，它会识别形如 `xxx16x16.ico`
 > 的按尺寸导出文件并原样取用对应的帧。
@@ -866,6 +867,9 @@ smart_crawler/
 │   ├── js_runner.py            runJavaScript 封装（限流 + 同步等待）
 │   ├── appicon.py              窗口图标（优先用 ico 文件，缺失时矢量现画）
 │   └── console.py              控制台窗口显示 / 隐藏（Win32 ShowWindow）
+│
+├── assets/                     随源码分发的资源
+│   └── appicon.ico             窗口 / exe 图标（16/32/48/64/256 五个原生尺寸）
 │
 ├── docs/
 │   └── screenshot.png          界面截图
