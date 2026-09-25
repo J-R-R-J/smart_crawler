@@ -278,7 +278,7 @@ frozen=False  base_dir=J:\...\smart_crawler
 data_dir=J:\...\smart_crawler\crawler_data
 PySide6 6.9.3  QtWebEngine/QtWebChannel/QtPrintSupport OK
 scrapling: 0.4.15 已就绪（HTTP 快速模式 / 隐身引擎 / 动态引擎 / 自适应选择器可用）
-window_icon: J:\...\smart_crawler\packaging\appicon.ico
+window_icon: J:\...\smart_crawler\assets\appicon.ico
 console: 有控制台窗口（可显示/隐藏）  visible=True
 modules: 33 ok, 0 failed
 SELFTEST RESULT: OK
@@ -636,6 +636,8 @@ Windows 上有**两条互不相干**的图标路径，很容易混为一谈：
 > （24 与 128 由 Windows 就近取用，都是**缩小**，不会放大糊掉）。
 > 重新生成用 `packaging\make_icon.py`，它会识别形如 `xxx16x16.ico`
 > 的按尺寸导出文件并原样取用对应的帧。
+> 注意该脚本属于**本机打包工具链**（`packaging\` 不入库、也不随源码包分发），
+> 用源码包的同学拿到的是已经生成的 `assets\appicon.ico`，无需重新生成。
 
 ### 控制台窗口
 

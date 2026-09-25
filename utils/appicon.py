@@ -9,8 +9,8 @@
    ``QApplication.setWindowIcon()``。**不调用就是空白** —— Qt 不会替你猜，
    也不会自动继承 exe 资源里的图标。
 
-本模块负责第 2 条。图标来源优先用现成的 .ico（打包时随 datas 分发，
-源码运行时取本机 packaging/ 下的那份），找不到就用 QPainter **现画**一个，
+本模块负责第 2 条。图标来源优先用现成的 .ico（打包时随 datas 分发；
+源码运行时取仓库里的 assets/ 那份），找不到就用 QPainter **现画**一个，
 保证源码运行、CI、无图标文件的克隆体上左上角都不会是空白。
 """
 
@@ -55,7 +55,8 @@ def search_dirs() -> list:
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     dirs.append(root)
     dirs.append(os.path.join(root, "assets"))
-    # packaging/ 是本机打包工具链（不入库），开发机上图标就在这里
+    # packaging/ 是本机打包工具链（不入库、不进源码包），仅作开发机备用；
+    # 权威副本是仓库里的 assets/appicon.ico，所以它排在前面
     dirs.append(os.path.join(root, "packaging"))
 
     # 冻结后：exe 同级目录（用户手动放一个图标也能生效）

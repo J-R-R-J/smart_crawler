@@ -41,10 +41,30 @@ def analyze(pix, label, x0, y0, x1, y1):
 
 def main():
     from PySide6.QtWidgets import QApplication
+    from PySide6.QtGui import QFontDatabase
 
     app = QApplication(sys.argv)
     app.setApplicationName("SmartCrawler")
     app.setOrganizationName("SmartCrawler")
+
+    # ------------------------------------------------------------------
+    # 没有字体就**不要生成**。
+    #
+    # 离屏环境（尤其是容器 / CI / AI 沙箱）常常没有可用字体，
+    # QFontDatabase.families() 会返回空列表。此时 Qt 仍会「画」出界面，
+    # 但所有文字都是空白 —— 截出来的图看着有窗口、有控件，就是没有字，
+    # 而且**像素统计也未必能发现**（大片网页底色会把指标撑得很好看）。
+    # 这种图贴到 README 上等于「没有内容」，还会把别人桌面环境下生成的
+    # 好图覆盖掉。所以宁可失败退出，也不写文件。
+    # ------------------------------------------------------------------
+    if not QFontDatabase.families():
+        print("FATAL: 当前环境没有可用字体（QFontDatabase.families() 为空）。",
+              flush=True)
+        print("       离屏渲染的文字会全部缺失，生成的截图不能用于 README。",
+              flush=True)
+        print("       请在**有桌面环境的机器**上运行本脚本；"
+              "已存在的 docs/screenshot.png 未被改动。", flush=True)
+        return 2
 
     from ui.main_window import MainWindow
 
@@ -78,4 +98,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
