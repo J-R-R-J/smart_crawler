@@ -99,6 +99,50 @@
   `Selector`，旧文档里的 `Adaptor` 已改名；`auto_save` 必须配合
   `Selector(..., adaptive=True)` 才会生效。
 
+### 打包与分发（补记）
+
+- **免安装版预留 `ms-playwright\` 空文件夹**：只有隐身 / 动态引擎需要
+  Playwright 浏览器，其余引擎都不要。预留该目录后，用户把浏览器增强包解压
+  进去即可；程序也会把 `PLAYWRIGHT_BROWSERS_PATH` 自动指向它，因此
+  `scrapling install` 这条路同样改成下载到程序自己的目录（绕开
+  `%LOCALAPPDATA%` 的杀软拦截）。两个目录**缺一不可**：隐身引擎走 patchright，
+  `headless=True`（默认）启动 headless shell，`headless=False` 才用完整 chromium。
+- **新增可选附件 `SmartCrawler-v0.0.4-win64-browsers.zip`**：内含
+  `chromium-1243` 与 `chromium_headless_shell-1243`（playwright / patchright
+  **1.63.0** 要求的版本号），解压即用，不必联网下载数百 MB。
+  主包体积不变 —— 把浏览器塞进主包会让它从约 139 MB 涨到约 450 MB。
+- **修复 `browsers_ready()` 会谎报**：原判定是「`ms-playwright` 目录非空即就绪」，
+  而免安装版恰好会预置这个空文件夹，用户往里丢一个说明 txt 就会让界面显示
+  「四种引擎均可用」。现在改为**找得到浏览器可执行文件**才算就绪。
+- `install_hint()` 改为同时给出「解压浏览器增强包」与在线安装两条路，
+  并把前者放在前面 —— 免安装版面向的正是「不想碰命令行」的用户。
+- 新增 `browser_drop_dirs()`，把两个可用落点收成一个函数，
+  供提示文案、README 与 `_prepare_import_path()` 共用，避免各写一份而漂移。
+- **安装 extra 由 `scrapling[all]` 改为 `scrapling[fetchers]`**：
+  scrapling 0.4.15 的 `all = ai,shell`，`ai` / `shell` 会在 `fetchers` 之外
+  再拉进 `mcp` / `IPython` / `markdownify`（连依赖树实测约 56 MB）。
+  本项目只用四个引擎，四个引擎要的依赖（`curl_cffi` / `patchright` /
+  `playwright`，以及控制台脚本要的 `click`）全在 `fetchers` 里。新增
+  `scrapling_engine.SCRAPLING_EXTRA` 作为唯一出处。
+- **修复免安装版的「联网下载浏览器」命令根本跑不起来**：
+  `pip install --target` 会把控制台脚本放进 `<外挂目录>\Scripts\`，
+  脚本启动时 `sys.path[0]` 是 `Scripts\` 那一层、**不含外挂目录**，
+  于是 `from scrapling.cli import main` 直接 `ModuleNotFoundError`。
+  程序本体的 `sys.path` 里有外挂目录，但那是本进程的事，管不到用户新起的进程。
+  现在 `install_hint()` 在冻结版给出带 `PYTHONPATH` 与
+  `PLAYWRIGHT_BROWSERS_PATH` 的完整命令，源码运行则给裸命令（venv 里路径本就通）。
+- **界面层不再可能出现写死的 Python 版本号**：原来只查了
+  `left_panel.py` 里的一个具体字符串，换成别的写法就会漏；
+  测试改为扫描 `ui\*.py` 全部自由文本，任何 `3.1x` 版本字面量都算违规
+  （版本一律取自 `python_tag()`）。
+- 文档澄清 Python 版本的两件事（原先 README 与 requirements.txt 只写
+  「必须 3.13」，与「环境要求 3.10+」并列时像自相矛盾）：
+  ① scrapling 自身要求 **≥3.10**（它的 `Requires-Python`）；
+  ② 只有**免安装版的外挂目录**要求与 exe 内置运行时同一次版本（3.13.x），
+  那是带 C 扩展的包的 ABI 匹配要求，不是 scrapling 的门槛。
+- 文档更正：`scrapling[fetchers]` **不会**安装 camoufox，`scrapling install`
+  下载的也是 chromium；浏览器**不随 pip 下发**，pip 只装 Python 包。
+
 ---
 
 ## [0.0.3] - 2026-09-20

@@ -285,7 +285,7 @@ class LeftPanel(QWidget):
         self.refresh_engine_hint()
 
     def refresh_engine_hint(self) -> None:
-        """按 Scrapling 是否可用来提示引擎可用性。
+        """按 Scrapling 的可用程度提示引擎可用性。
 
         这里用 ``scrapling_engine.probe()``（内部 find_spec）而**不是**真正
         import：仅为了显示一行提示，没必要在启动阶段就把 scrapling
@@ -293,21 +293,47 @@ class LeftPanel(QWidget):
 
         probe() 会先把外挂依赖目录（crawler_data/site-packages）加进
         sys.path，因此「把 scrapling 装到外挂目录」这种用法也能被认出来。
+
+        **三种状态要分开说，别合并**（合并就会说谎）：
+          ① 包没装        -> 只有浏览器引擎可用；
+          ② 包装了、浏览器没下 -> HTTP 快速模式与自适应可用，
+                             隐身 / 动态引擎会失败（这里必须说清楚）；
+          ③ 都齐了        -> 四种引擎均可用。
+        曾经的写法是「probe() 为真 => 四种引擎均可用」，把 ② 也说成全可用，
+        用户照着去用隐身引擎就会在抓取时失败。
         """
         from core import scrapling_engine as se
-        found = se.probe()
 
-        if found:
-            self.engine_hint.setText("Scrapling 已就绪，四种引擎均可用。")
-        elif self.engine() == "browser":
-            self.engine_hint.setText(
-                "未检测到 Scrapling；浏览器引擎不受影响。\n"
-                f"要用其它引擎，可安装到外挂目录：{se.site_packages_hint()}")
-        else:
-            self.engine_hint.setText(
-                "未检测到 Scrapling，该引擎将在抓取时自动回退为浏览器引擎。\n"
-                f"安装到外挂目录即可（需与本程序同为 Python 3.13）：\n"
+        found = se.probe()
+        # 自适应选择器同样依赖 Scrapling；不可用时置灰，避免给出一个
+        # 勾了也不生效的开关（与「控制台」勾选框的处理方式保持一致）。
+        self.adaptive_chk.setEnabled(bool(found))
+        if not found:
+            self.adaptive_chk.setToolTip(
+                "需要 Scrapling：未安装时自适应选择器不会生效。\n"
+                f"请先安装到外挂目录（{se.python_tag()}）：\n"
                 f"{se.site_packages_hint()}")
+
+        if not found:
+            if self.engine() == "browser":
+                self.engine_hint.setText(
+                    "未检测到 Scrapling；浏览器引擎不受影响。\n"
+                    f"要用其它三种引擎，可安装到外挂目录（需与本程序同为 "
+                    f"Python {se.python_tag()}）：\n"
+                    f"{se.site_packages_hint()}\n"
+                    "安装完成后重新打开本程序即可识别。")
+            else:
+                self.engine_hint.setText(
+                    "未检测到 Scrapling，该引擎将在抓取时自动回退为浏览器引擎。\n"
+                    f"安装到外挂目录即可（需与本程序同为 Python {se.python_tag()}）：\n"
+                    f"{se.site_packages_hint()}\n"
+                    "安装完成后重新打开本程序即可识别。")
+        elif not se.browsers_ready():
+            self.engine_hint.setText(
+                "Scrapling 已就绪：HTTP 快速模式与自适应选择器可用。\n"
+                + se.install_hint())
+        else:
+            self.engine_hint.setText("Scrapling 已就绪，四种引擎均可用。")
 
     def set_run_settings(self, stealth: bool, max_download_mb: int,
                          download_exts: str = "") -> None:

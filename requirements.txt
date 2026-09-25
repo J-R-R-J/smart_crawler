@@ -11,29 +11,51 @@ PySide6>=6.6.0
 #
 # 装上后解锁四项能力：
 #   · HTTP 快速模式    curl_cffi 伪装浏览器 TLS 指纹，不开浏览器，静态页最快
-#   · 隐身引擎         可自动过 Cloudflare 验证
+#   · 隐身引擎         patchright（playwright 的补丁分支），可自动过 Cloudflare 验证
 #   · 动态引擎         Playwright，适合 JS 渲染重的页面
 #   · 自适应选择器     网站改版后依据元素特征自动重新定位（自愈）
+#
+# 装哪个 extra：**用 [fetchers]，不要用 [all]**。
+#   scrapling 0.4.15 的 Provides-Extra 里 all = ai,shell，而 ai / shell
+#   除了 fetchers 还会拉进 mcp / IPython / markdownify（连依赖树实测多约 56 MB）。
+#   本项目只用上面四个引擎，不用它的交互式 shell 与 MCP 服务，
+#   这四个引擎要的依赖（curl_cffi / patchright / playwright / click）全在 fetchers 里。
+#
+# Python 版本：
+#   · scrapling 本身要求 **>=3.10**（METADATA 里的 Requires-Python），
+#     并不是只能 3.13。下面出现的 3.13 是**另一回事**，见下一条。
+#   · 只有「免安装版 / 外挂目录」这个场景要求 3.13：外挂目录里装的是带 C 扩展的
+#     包（curl_cffi / greenlet / lxml），必须与**打包 exe 内置的那套运行时**
+#     同一次版本，否则导入就报 ABI 不匹配。这是该场景的约束，
+#     与「scrapling 支持哪些版本」无关。
 #
 # 安装（本项目 venv 是 --without-pip 建的，用系统 pip 指定目标解释器）：
 #   ⚠️ --python 必须放在 install **之前**，否则 pip 报
 #      "The --python option must be placed before the pip subcommand name"
 #
-#   python -m pip --python "<项目>\.venv\Scripts\python.exe" install "scrapling[all]"
-#   <项目>\.venv\Scripts\scrapling.exe install      # 仅隐身/动态引擎需要
+#   python -m pip --python "<项目>\.venv\Scripts\python.exe" install "scrapling[fetchers]"
 #
 # 免安装版（exe 不看 .venv，要把包装进它的外挂依赖目录）：
-#   python -m pip install --target "<解压目录>\SmartCrawler\crawler_data\site-packages" "scrapling[all]"
-#   必须是 Python 3.13（与打包用的解释器同版本），否则 curl_cffi / greenlet
-#   这类带 C 扩展的包无法导入。
+#   python -m pip install --target "<解压目录>\SmartCrawler\crawler_data\site-packages" "scrapling[fetchers]"
+#   （用 3.13.x 的 Python；理由见上面的「Python 版本」）
 #
 # 注意：
-#   · 第二条会下载 stealth 浏览器（数百 MB），仅当要用隐身/动态引擎时才需要；
-#     HTTP 快速模式与自适应选择器**不需要**执行它。
-#   · 浏览器默认下到用户目录，若被安全软件拦截（EPERM），可先设
-#     PLAYWRIGHT_BROWSERS_PATH 指到非系统盘，并把该目录加入杀软白名单。
-#   · 打包发布时建议不包含 scrapling：playwright / camoufox 会把产物撑大数百 MB，
-#     而未安装时的降级路径已由 tests/test_scrapling.py 覆盖。
+#   · pip 只装 Python 包，**浏览器不随 pip 下发**。要用隐身 / 动态引擎，再二选一：
+#       1) 解压 Release 里的 SmartCrawler-v0.0.4-win64-browsers.zip，
+#          把其中的 ms-playwright 放到 <解压目录>\SmartCrawler\ 下（推荐，不用联网）；
+#       2) 联网下载。**免安装版必须先把外挂目录放进 PYTHONPATH**，否则
+#          <外挂目录>\Scripts\scrapling.exe 连自己都导不进来
+#          （pip --target 装的脚本，sys.path[0] 是 Scripts\ 而不是外挂目录）：
+#            $env:PYTHONPATH="<解压目录>\SmartCrawler\crawler_data\site-packages"
+#            $env:PLAYWRIGHT_BROWSERS_PATH="<解压目录>\SmartCrawler\ms-playwright"
+#            & "<解压目录>\SmartCrawler\crawler_data\site-packages\Scripts\scrapling.exe" install
+#     HTTP 快速模式与自适应选择器**不需要**浏览器。
+#   · 隐身引擎默认启动 headless shell；chromium 与 chromium-headless-shell
+#     两个浏览器目录缺一不可。
+#   · scrapling[fetchers] **不会**安装 camoufox（那是另一个浏览器后端，本项目不用），
+#     scrapling install 下载的是 chromium，不是 camoufox/firefox。
+#   · 打包发布时有意不含 scrapling 及其浏览器（合计数百 MB，与「解压即用」冲突）；
+#     未安装时的降级路径已由 tests/test_scrapling.py 覆盖。
 #
 # 说明：
 #   · QWebEngine 从 6.6 起自带 Chromium 124+

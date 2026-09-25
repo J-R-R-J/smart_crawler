@@ -5,7 +5,7 @@
 --------
 1. **可选依赖**：scrapling 未安装时，本模块所有能力返回「不可用」而不是抛异常，
    程序其余功能完全不受影响。这样正式版打包可以不带 scrapling 及其浏览器
-   （playwright / camoufox 会把包体撑大数百 MB）。
+   （playwright / patchright / curl_cffi 的 wheel 加上浏览器合计数百 MB）。
 2. **惰性导入**：只有在真正用到时才 ``import scrapling``，避免拖慢启动。
 3. **统一契约**：``extract_records`` 返回与 ``core.extractor`` 相同形状的
    ``list[dict]``，可直接并入现有结果表。
@@ -33,6 +33,22 @@ ADAPTIVE_DB = os.path.join(DATA_DIR, "scrapling_adaptive.db")
 
 # 默认的自适应相似度阈值（%）；越高越严格
 DEFAULT_PERCENTAGE = 40
+
+#: 让用户安装的 extra 名。
+#:
+#: **用 ``fetchers`` 而不是 ``all``**。实测 scrapling 0.4.15 的
+#: ``Provides-Extra``：``all = ai,shell``，而 ``ai`` / ``shell`` 除了
+#: ``fetchers`` 还各自拉 ``mcp`` / ``IPython`` 与 ``markdownify``
+#: （连同各自的依赖树，本机实测多出约 56 MB）。
+#: 本项目只用四个引擎，不用 scrapling 的交互式 shell 与 MCP 服务，所以不需要。
+#:
+#: 四个能力对应的依赖全在 ``fetchers`` 里：
+#:   · HTTP 快速模式 -> curl_cffi
+#:   · 隐身引擎       -> patchright
+#:   · 动态引擎       -> playwright
+#:   · 自适应选择器   -> 只用基础包的 lxml / cssselect
+#: 另外 ``scrapling install`` 这个控制台脚本依赖 ``click``，也在 ``fetchers`` 里。
+SCRAPLING_EXTRA = "fetchers"
 
 # ----------------------------------------------------------------------
 # 超时单位：同一库里的两套刻度（**踩过的坑，勿改**）
@@ -77,16 +93,16 @@ def site_packages_dir() -> str:
     """外挂依赖目录（crawler_data/site-packages）。
 
     正式版 exe **有意不打包** scrapling 及其浏览器依赖（见
-    packaging/SmartCrawler.spec 的说明：playwright / camoufox 合计数百 MB，
-    运行时还要另外下载浏览器，与「解压即用」的免安装包定位冲突）。
+    packaging/SmartCrawler.spec 的说明：playwright / patchright / curl_cffi
+    的 wheel 加上浏览器合计数百 MB，与「解压即用」的免安装包定位冲突）。
 
     但冻结后程序会把这个目录追加到 sys.path，于是想用非浏览器引擎的用户
     可以用一条 pip 命令把 scrapling 装进来，而不必动安装目录里的其它文件：
 
-        python -m pip install --target "<该目录>" "scrapling[all]"
+        python -m pip install --target "<该目录>" "scrapling[fetchers]"
 
-    版本必须与主程序一致（当前为 Python 3.13），否则带 C 扩展的
-    curl_cffi / greenlet 无法导入。
+    版本必须与主程序一致（见 python_tag()：外挂目录里装的是带 C 扩展的包，
+    curl_cffi / greenlet / lxml 与解释器次版本绑定），否则导不进来。
     """
     return SITE_PACKAGES_DIR
 
@@ -98,31 +114,109 @@ def site_packages_hint() -> str:
 
     · ``site_packages_hint()``（本函数）：scrapling **包本身**没装 ——
       尤其是冻结版，exe 的 sys.path 指向包内部，不看你项目里的 .venv；
-    · ``install_hint()``：包装好了，但**浏览器**还没下载
+    · ``install_hint()``：包装好了，但**浏览器**还没就位
       （只有隐身 / 动态引擎需要）。
 
     这两个函数曾经同名，后者静默覆盖了前者，导致「装到外挂目录」的提示
     永远不显示（而测试查的是旧的那个，还以为通过）。
     tests/test_scrapling.py 里有「顶层不得重名」的守卫，防止再次发生。
     """
-    return f'python -m pip install --target "{SITE_PACKAGES_DIR}" "scrapling[all]"'
+    return (f'python -m pip install --target "{SITE_PACKAGES_DIR}" '
+            f'"scrapling[{SCRAPLING_EXTRA}]"')
+
+
+def python_tag() -> str:
+    """当前进程的 Python 版本号（如 "3.13"），用于安装提示。
+
+    不要把这个版本号写死在提示文案里：外挂目录里装的是带 C 扩展的包
+    （curl_cffi / greenlet / lxml），**必须与本程序同一个次版本**，
+    否则导不进来。写死会在换 Python 重新打包后给出错误的指引。
+    """
+    return f"{sys.version_info.major}.{sys.version_info.minor}"
+
+
+#: 判定「浏览器已就位」时认的相对可执行文件路径。
+#:
+#: 依据 playwright / patchright **1.63.0** 的 registry 表（两者完全一致）：
+#:   chromium                 -> chromium-<rev>\chrome-win64\chrome.exe
+#:   chromium-headless-shell  -> chromium_headless_shell-<rev>\
+#:                               chrome-headless-shell-win64\
+#:                               chrome-headless-shell.exe
+#:
+#: **两个都要有**：StealthyFetcher 走的是 patchright
+#: （scrapling/engines/_browsers/_stealth.py: ``from patchright.sync_api import
+#: sync_playwright``），headless=True（默认）启动的是 headless shell，
+#: 只有 headless=False 才用完整的 chromium。
+_BROWSER_EXE_RELPATHS = (
+    os.path.join("chrome-win64", "chrome.exe"),
+    os.path.join("chrome-headless-shell-win64", "chrome-headless-shell.exe"),
+)
+
+
+def browser_drop_dirs() -> tuple:
+    """浏览器可以放的两个位置，按优先级排列（供提示文案与 README 引用）。
+
+    ``_prepare_import_path()`` 按同样顺序挑第一个**存在**的目录设为
+    ``PLAYWRIGHT_BROWSERS_PATH``；用户自己设过该环境变量时永远优先。
+    """
+    return (os.path.join(SITE_PACKAGES_DIR, "ms-playwright"),
+            os.path.join(BASE_DIR, "ms-playwright"))
+
+
+def browsers_dir() -> str:
+    """Playwright 浏览器的存放目录；未确定时返回空串。"""
+    _prepare_import_path()
+    return os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "") or ""
+
+
+def browsers_ready() -> bool:
+    """隐身 / 动态引擎需要的 Playwright 浏览器是否已经**就位**。
+
+    与 ``probe()`` 的区别很重要：``probe()`` 只说明 **scrapling 包**能导入，
+    而 HTTP 快速模式与自适应选择器确实只要包就够了；
+    隐身 / 动态引擎还额外需要**几百 MB 的浏览器**。
+    两者混为一谈就会出现「界面说四种引擎都可用，一抓就失败」。
+
+    **判定标准是「找得到浏览器可执行文件」，而不是「目录非空」。**
+    免安装版会预置一个空的 ``ms-playwright\\`` 文件夹给用户解压用，
+    若只看目录里有没有东西，用户往里丢一个说明 txt 就会让界面谎报
+    「四种引擎均可用」——这与本函数存在的意义正好相反。
+    """
+    d = browsers_dir()
+    if not d or not os.path.isdir(d):
+        return False
+    try:
+        with os.scandir(d) as it:
+            subdirs = [e.path for e in it
+                       if e.is_dir() and e.name.lower().startswith("chromium")]
+    except Exception:
+        return False
+    for path in subdirs:
+        for rel in _BROWSER_EXE_RELPATHS:
+            if os.path.isfile(os.path.join(path, rel)):
+                return True
+    return False
 
 
 def _prepare_import_path() -> None:
     """把外挂依赖目录加入 sys.path，并补齐 Playwright 的浏览器目录。
 
     幂等，且在任何情况下都不抛异常 —— 这一步失败最坏只是「scrapling 不可用」。
+
+    **为什么不能「只执行一次」**：这个外挂目录本来就是让用户自己往里
+    装 scrapling 用的，他在程序**已经运行之后**才把这个目录建出来/填上，
+    是完全正常的用法。如果第一次检查时目录还不存在就把结果记死，
+    那么之后再调用也不会重新判断，表现为「照提示装好了，程序却一直说
+    未检测到 Scrapling」。所以这里每次都重新检查 ——
+    代价只是两次 ``os.path.isdir`` 加一次 list 包含判断，可以忽略。
     """
     global _path_ready
     with _lock:
-        if _path_ready:
-            return
-        _path_ready = True
-
         try:
             # 追加到**末尾**：包内模块优先，避免外挂目录劫持标准库或 PySide6
             if os.path.isdir(SITE_PACKAGES_DIR) and SITE_PACKAGES_DIR not in sys.path:
                 sys.path.append(SITE_PACKAGES_DIR)
+                log_info(f"[scrapling] 外挂依赖目录已加入 sys.path：{SITE_PACKAGES_DIR}")
         except Exception:
             pass
 
@@ -130,14 +224,16 @@ def _prepare_import_path() -> None:
         # 没设置时再找外挂目录 / exe 同级下的 ms-playwright。
         try:
             if not os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
-                for cand in (os.path.join(SITE_PACKAGES_DIR, "ms-playwright"),
-                             os.path.join(BASE_DIR, "ms-playwright")):
+                for cand in browser_drop_dirs():
                     if os.path.isdir(cand):
                         os.environ["PLAYWRIGHT_BROWSERS_PATH"] = cand
-                        log_info(f"[scrapling] 使用浏览器目录：{cand}")
+                        if not _path_ready:
+                            log_info(f"[scrapling] 使用浏览器目录：{cand}")
                         break
         except Exception:
             pass
+
+        _path_ready = True
 
 
 def _load() -> Optional[Any]:
@@ -239,10 +335,70 @@ def _storage_cls():
         return None
 
 
+def scrapling_cli() -> str:
+    """在外挂目录里找出 scrapling 可执行文件的真实路径；找不到返回空串。
+
+    为什么要找而不是写死：``pip install --target`` 把控制台脚本放到目标目录下
+    的脚本子目录里，而这个子目录在 Windows 上可能是 ``Scripts`` 也可能是
+    ``bin``（取决于 pip 版本）。写死任一个都会给一部分用户错误命令，
+    所以干脆两个都看，找到哪个就报哪个。
+    """
+    dirs = [os.path.join(SITE_PACKAGES_DIR, sub) for sub in ("Scripts", "bin")]
+    # 源码 / venv 运行时，脚本就在当前解释器旁边
+    try:
+        dirs.append(os.path.dirname(sys.executable))
+    except Exception:
+        pass
+    for d in dirs:
+        for name in ("scrapling.exe", "scrapling"):
+            path = os.path.join(d, name)
+            if os.path.isfile(path):
+                return path
+    return ""
+
+
 def install_hint() -> str:
-    """浏览器引擎缺失时给用户的安装提示。"""
-    return ("浏览器类引擎（StealthyFetcher / DynamicFetcher）需要额外下载浏览器，"
-            "请在项目 venv 下执行： scrapling install")
+    """**包已经装好、但浏览器还没就位**时的提示。
+
+    场景区分（这两个函数以前同名互相覆盖，别再合并）：
+      · ``site_packages_hint()``：scrapling 包本身没装；
+      · ``install_hint()``（本函数）：包装好了，缺的是隐身 / 动态引擎要用的
+        Playwright 浏览器（约 700 MB）。
+
+    **两条路都要给，且把「解压浏览器增强包」放前面**：免安装版面向的正是
+    「不想碰命令行」的用户，让他为了一个可选引擎在线下载 700 MB 是下策；
+    仓库的 Release 里另有一个浏览器增强包，解压即可。
+
+    命令用 **``scrapling install``（控制台脚本）**，不要写
+    ``python -m scrapling install`` —— scrapling 包里没有 ``__main__.py``，
+    那样写会直接报 "No module named scrapling.__main__"（实测）。
+
+    **冻结版还要额外给两个环境变量，否则那条命令根本跑不起来**：
+    ``pip install --target`` 会把控制台脚本放到 ``<外挂目录>\\Scripts\\``，
+    脚本启动时 ``sys.path[0]`` 是脚本自己所在目录，**不含外挂目录**，
+    于是 ``from scrapling.cli import main`` 直接 ModuleNotFoundError。
+    程序自己能用是因为 ``_prepare_import_path()`` 往 sys.path 里加了外挂目录，
+    但那是**本进程**的事，管不到用户在命令行里新起的进程 —— 只能靠 PYTHONPATH。
+    ``PLAYWRIGHT_BROWSERS_PATH`` 同理：不设的话浏览器会下到
+    ``%LOCALAPPDATA%``，而不是程序预留的 ms-playwright。
+    """
+    cli = scrapling_cli()
+    cmd = f'"{cli}" install' if cli else "scrapling install"
+    # 推荐落点：exe 同级（源码运行即项目根）的 ms-playwright
+    drop = browser_drop_dirs()[1]
+    head = ("隐身 / 动态引擎还需要 Playwright 浏览器（约 700 MB），二选一：\n"
+            "1) 解压「浏览器增强包」，把里面的 ms-playwright 文件夹放到\n"
+            f"   {drop}\n")
+    if getattr(sys, "frozen", False):
+        # 免安装版必须带上两个环境变量，否则 scrapling.exe 连自己都导不进来
+        tail = ("2) 联网下载，在 PowerShell 里执行这三行：\n"
+                f'   $env:PYTHONPATH="{SITE_PACKAGES_DIR}"\n'
+                f'   $env:PLAYWRIGHT_BROWSERS_PATH="{drop}"\n'
+                f"   & {cmd}")
+    else:
+        # 源码运行时控制台脚本就在项目 .venv 里，路径本来就通
+        tail = f"2) 在项目目录执行  {cmd}"
+    return head + tail
 
 
 # ----------------------------------------------------------------------
@@ -666,9 +822,12 @@ def find_similar(html: str, url: str, selector: str, *, index: int = 0,
 
 
 __all__ = [
-    "ADAPTIVE_DB", "DEFAULT_PERCENTAGE", "FetchResult",
+    "ADAPTIVE_DB", "DEFAULT_PERCENTAGE", "FetchResult", "SCRAPLING_EXTRA",
     "available", "version", "unavailable_reason", "reset_cache",
-    "install_hint", "site_packages_hint", "http_get", "stealth_get",
+    "install_hint", "site_packages_hint", "site_packages_dir",
+    "python_tag", "browsers_dir", "browsers_ready", "scrapling_cli",
+    "browser_drop_dirs",
+    "probe", "http_get", "stealth_get",
     "dynamic_get",
     "make_selector", "extract_records", "find_similar", "field_value",
     "seconds_to_ms",

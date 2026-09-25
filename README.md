@@ -62,6 +62,13 @@
 
 > 首次启动较慢（浏览器内核需要初始化），属正常现象。
 > 运行时数据写在程序目录下的 `crawler_data\`，删除该目录即可彻底重置。
+>
+> 这个包里**不含** Scrapling 与它的浏览器（合计数百 MB）。默认的浏览器引擎
+> 不需要它们；想解锁 HTTP 快速模式 / 隐身引擎 / 动态引擎 / 自适应选择器，
+> 见「[抓取引擎（Scrapling 融合）](#抓取引擎scrapling-融合)」。其中只有
+> 隐身 / 动态引擎需要浏览器，另有一个可选附件
+> **`SmartCrawler-v0.0.4-win64-browsers.zip`**，解压到程序目录即可，
+> 不必联网下载。
 
 ### 方式二：下载源码包
 
@@ -71,7 +78,7 @@
 | 项目 | 说明 |
 | --- | --- |
 | 文件名 | `smart_crawler-v0.0.4.zip` |
-| 大小 | 约 203 KB |
+| 大小 | 约 215 KB |
 | 内容 | 完整源码（配置 / 核心 / 界面 / 工具 / 测试 / 文档），**不含**虚拟环境与运行时数据 |
 
 解压后按「[安装](#安装)」章节装依赖，再运行 `python main.py`。
@@ -520,13 +527,37 @@ Scrapling 是**可选依赖**。不安装时程序完全正常，只是选择非
 # 本项目的 venv 以 --without-pip 创建，用系统 pip 指定目标解释器。
 # ⚠️ --python 必须放在 install 之前，否则 pip 会报
 #    "The --python option must be placed before the pip subcommand name"
-python -m pip --python "<项目>\.venv\Scripts\python.exe" install "scrapling[all]"
+python -m pip --python "<项目>\.venv\Scripts\python.exe" install "scrapling[fetchers]"
+```
 
-# 仅「隐身引擎 / 动态引擎」需要：下载 stealth 浏览器（数百 MB）
+**装 `[fetchers]`，别装 `[all]`。** scrapling 0.4.15 的 `all = ai,shell`，
+而 `ai` / `shell` 除了 `fetchers` 还会拉进 `mcp` / `IPython` / `markdownify`
+（连同依赖树，本机实测多出约 56 MB）。本项目只用四个引擎，
+不用它的交互式 shell 与 MCP 服务；这四个引擎要的依赖全在 `fetchers` 里：
+
+| 能力 | 依赖 | 在 `[fetchers]` 里 |
+| --- | --- | --- |
+| HTTP 快速模式 | `curl_cffi` | 是 |
+| 隐身引擎 | `patchright` | 是 |
+| 动态引擎 | `playwright` | 是 |
+| 自适应选择器 | 基础包的 `lxml` / `cssselect` | 基础包自带 |
+| `scrapling install` 控制台脚本 | `click` | 是 |
+
+> **Python 版本别混淆**：scrapling 自己要求 **≥3.10**（见它的 `Requires-Python`），
+> 与「[环境要求](#环境要求)」里的 3.10+ 一致。
+> 只有**免安装版的外挂目录**那一步额外要求 **3.13.x**，原因见
+> 「[免安装版如何使用](#免安装版如何使用外挂依赖目录)」—— 那是 ABI 匹配，
+> 不是 scrapling 的门槛。
+
+```bash
+# 仅「隐身引擎 / 动态引擎」需要：下载 stealth 浏览器（约 700 MB）
 <项目>\.venv\Scripts\scrapling.exe install
 ```
 
 > HTTP 快速模式与自适应选择器**不需要**执行 `scrapling install`。
+>
+> 这条命令在**源码运行**时直接可用（控制台脚本就在项目 `.venv` 里）。
+> 免安装版要多设一个 `PYTHONPATH`，原因见下面的「路线 2」。
 >
 > 浏览器默认下载到用户目录，若被安全软件拦截（`EPERM: operation not permitted`），
 > 可先设置环境变量把目标改到非系统盘，并把该目录加入杀软白名单：
@@ -537,10 +568,16 @@ python -m pip --python "<项目>\.venv\Scripts\python.exe" install "scrapling[al
 
 ### 免安装版如何使用（外挂依赖目录）
 
-免安装的 `SmartCrawler.exe` **有意不打包** Scrapling：`playwright` / `camoufox`
-的 wheel 合计数百 MB，运行时还要另外下载浏览器，与「解压即用」的定位冲突。
+免安装的 `SmartCrawler.exe` **有意不打包** Scrapling 及其浏览器：
+`playwright` / `patchright` / `curl_cffi` 的 wheel 加上浏览器合计数百 MB，
+与「解压即用」的定位冲突。
 但这意味着**装在 `.venv` 里的 Scrapling 对 exe 无效** —— exe 的 `sys.path`
 指向包内部，不看你项目里的虚拟环境。
+
+> 澄清两件常被误解的事：
+> `scrapling[fetchers]` **不会**安装 camoufox（那是另一个浏览器后端，本项目不用），
+> `scrapling install` 下载的也是 chromium，不是 camoufox / firefox；
+> 浏览器也**不随 pip 下发** —— pip 只装 Python 包，浏览器要另外获取。
 
 为此程序会把下面这个目录追加到 `sys.path`（在 exe 同级）：
 
@@ -551,27 +588,123 @@ python -m pip --python "<项目>\.venv\Scripts\python.exe" install "scrapling[al
 用一条命令把 Scrapling 装进去，即可让免安装版也用上非浏览器引擎：
 
 ```powershell
-# 必须是 Python 3.13（与打包用的解释器同版本），否则 curl_cffi / greenlet
-# 这类带 C 扩展的包无法导入
-python -m pip install --target "<解压目录>\SmartCrawler\crawler_data\site-packages" "scrapling[all]"
+# 这里用 3.13.x 的 Python —— 注意这是**免安装版自己的约束**，不是 scrapling 的：
+# 外挂目录里装的是带 C 扩展的包（curl_cffi / greenlet / lxml），必须与
+# 打包 exe 内置的那套运行时同一次版本，否则导入报 ABI 不匹配。
+# scrapling 本身只要求 >=3.10。程序界面上的安装提示会自动带上它要求的版本号。
+python -m pip install --target "<解压目录>\SmartCrawler\crawler_data\site-packages" "scrapling[fetchers]"
 
-# 仅「隐身引擎 / 动态引擎」需要下载浏览器（数百 MB）
-$env:PLAYWRIGHT_BROWSERS_PATH = "<解压目录>\SmartCrawler\crawler_data\site-packages\ms-playwright"
-python -m scrapling install
+# 仅「隐身 / 动态引擎」需要浏览器（约 700 MB），见下一节。
 ```
 
-装完后重新启动程序，「② 抓取引擎」下方的提示会从「未检测到 Scrapling」
-变为「Scrapling 已就绪，四种引擎均可用」。也可以直接看自检：
+> 为什么是 `[fetchers]` 而不是 `[all]`：见
+> 「[安装（可选）](#安装可选)」里那张依赖表。
+
+装完后重新启动程序。界面提示会按**实际就绪程度**分三种说法：
+
+| 状态 | 提示 |
+| --- | --- |
+| 包没装 | 未检测到 Scrapling；浏览器引擎不受影响 + 安装命令 |
+| 包装了、浏览器没就位 | HTTP 快速模式与自适应选择器可用；隐身 / 动态引擎还需要浏览器 |
+| 都齐了 | Scrapling 已就绪，四种引擎均可用 |
+
+### 浏览器增强包（只有隐身 / 动态引擎需要）
+
+先看清需求，别白下 700 MB：
+
+| 引擎 | 需要 scrapling 包 | 需要浏览器 |
+| --- | --- | --- |
+| 浏览器引擎（默认） | 否 | 否 |
+| HTTP 快速模式 | 是 | **否** |
+| 自适应选择器 | 是 | **否** |
+| 隐身引擎 `StealthyFetcher` | 是 | **是** |
+| 动态引擎 `DynamicFetcher` | 是 | **是** |
+
+也就是说：装上 `scrapling[fetchers]` 之后，**HTTP 快速模式与自适应选择器已经可用**，
+不需要再下任何东西。只有隐身 / 动态引擎要浏览器，两条路任选一条。
+
+#### 路线 1：解压浏览器增强包（推荐，免安装版选这条）
+
+从 Release 附件下载 `SmartCrawler-v0.0.4-win64-browsers.zip`（约 312 MB，
+解压后约 706 MB），把里面的 `ms-playwright` 文件夹解压到 **exe 同级**：
+
+```
+<解压目录>\SmartCrawler\
+├── SmartCrawler.exe
+├── _internal\
+└── ms-playwright\                                  ← 增强包里的这个文件夹
+    ├── chromium-1243\
+    │   ├── chrome-win64\chrome.exe
+    │   └── INSTALLATION_COMPLETE
+    ├── chromium_headless_shell-1243\
+    │   ├── chrome-headless-shell-win64\chrome-headless-shell.exe
+    │   └── INSTALLATION_COMPLETE
+    ├── ffmpeg-1011\
+    └── winldd-1007\
+```
+
+免安装版里**已经预留了这个空文件夹**（`ms-playwright\`），解压覆盖进去即可，
+**不需要设任何环境变量**。重开程序，提示会变成「四种引擎均可用」。
+
+> 两个浏览器目录**缺一不可**：隐身引擎用的是 patchright，
+> `headless=True`（默认）启动的是 headless shell，只有 `headless=False`
+> 才启动完整的 chromium。
+>
+> 目录名里的 `1243` 是 playwright / patchright **1.63.0** 要求的版本号，
+> 换依赖版本就要换对应的浏览器，不能混用。
+
+#### 路线 2：联网下载
+
+**源码运行**（控制台脚本就在项目 `.venv` 里，路径本来就通）：
+
+```powershell
+# 注意是 scrapling 的**控制台脚本**，不要写 python -m scrapling：
+# scrapling 包里没有 __main__.py，那样写会报 No module named scrapling.__main__
+<项目>\.venv\Scripts\scrapling.exe install
+```
+
+**免安装版必须多设两个环境变量**，否则这条命令会直接
+`ModuleNotFoundError: No module named 'scrapling'`：
+
+```powershell
+$sp = "<解压目录>\SmartCrawler\crawler_data\site-packages"
+
+# ① 必须：pip --target 装的控制台脚本，启动时 sys.path[0] 是 Scripts\ 那一层，
+#    **不含外挂目录**，所以脚本自己 import 不到 scrapling。
+#    程序本体的 sys.path 里有它（_prepare_import_path() 加的），
+#    但那是程序进程的事，管不到你在命令行里新起的进程 —— 只能靠 PYTHONPATH。
+$env:PYTHONPATH = $sp
+
+# ② 建议：不设的话浏览器会下到 %LOCALAPPDATA%\ms-playwright，
+#    而不是程序预置的 ms-playwright\。
+$env:PLAYWRIGHT_BROWSERS_PATH = "<解压目录>\SmartCrawler\ms-playwright"
+
+& "$sp\Scripts\scrapling.exe" install
+```
+
+设了 ② 之后，浏览器会**下到程序自己的文件夹里**，既不再落在
+`%LOCALAPPDATA%`，也就绕开了那里的杀软拦截问题。
+
+> 这两条 `$env:` 只对**当前这个 PowerShell 窗口**有效，关掉就没了 ——
+> 这是一次性的安装操作，不需要永久生效。
+
+也可以直接看自检：
 
 ```powershell
 .\SmartCrawler.exe --selftest
 # scrapling: 0.4.15 已就绪（HTTP 快速模式 / 隐身引擎 / 动态引擎 / 自适应选择器可用）
 ```
 
+> 提示里那句「已就绪」只说明 **scrapling 包**能导入。隐身 / 动态引擎还依赖
+> Playwright 浏览器，所以自检输出会照抄 scrapling 自己的说明，
+> 并不代表浏览器一定已就位 —— 以界面提示的三态为准。
+
 > `PLAYWRIGHT_BROWSERS_PATH` 若已在系统里设过，程序**不会覆盖**它；
-> 只有未设置时才会去找 `site-packages\ms-playwright` 与 `ms-playwright`。
+> 只有未设置时才会依次找
+> `<解压目录>\SmartCrawler\crawler_data\site-packages\ms-playwright`
+> 与 `<解压目录>\SmartCrawler\ms-playwright`，取第一个存在的。
 >
-> 这个目录不存在时没有任何副作用，程序只是照常回退为浏览器引擎。
+> 这两个目录不存在时没有任何副作用，程序只是照常回退为浏览器引擎。
 
 ### 自适应选择器（网站改版自愈）
 
@@ -599,11 +732,15 @@ python -m scrapling install
 
 ### 说明
 
-- 实测基于 **scrapling 0.4.15**（Python 3.13）。
+- 实测基于 **scrapling 0.4.15**（开发环境 Python 3.13；scrapling 自身要求 ≥3.10）。
 - 该版本入口类为 `Selector`，旧文档里的 `Adaptor` 已改名；
   `auto_save` 必须配合 `Selector(..., adaptive=True)` 才生效。
-- 打包发布时建议**不包含** Scrapling：playwright / camoufox 会使产物增大数百 MB，
-  而未安装时的降级路径已有测试覆盖。
+- 打包发布时**有意不包含** Scrapling 及其浏览器：`playwright` / `patchright` /
+  `curl_cffi` 的 wheel 加浏览器合计数百 MB，与「解压即用」的定位冲突。
+  注意 `scrapling[fetchers]` **不装 camoufox**（`scrapling install` 下的是
+  chromium），浏览器也**不随 pip 下发**，
+  需要在「[浏览器增强包](#浏览器增强包只有隐身--动态引擎需要)」里单独获取。
+  未安装时的降级路径已有测试覆盖。
 
 ---
 
@@ -1082,7 +1219,7 @@ POPUP_CLOSE_SELECTORS.append(".my-site-close-btn")
 # 界面交互测试：导航、多格式复选、滚动面板、窗口尺寸、停止复位、跳过按钮、各面板操作（64 项）
 .venv\Scripts\python.exe tests\test_ui.py
 
-# Scrapling 融合测试：解析、自适应自愈、降级路径、接入层、外挂目录（99 项）
+# Scrapling 融合测试：解析、自适应自愈、降级路径、接入层、外挂目录、浏览器就位判断（129 项）
 .venv\Scripts\python.exe tests\test_scrapling.py
 
 # 界面外壳测试：窗口图标、控制台开关、样式表路径、新窗口请求（35 项）
@@ -1098,9 +1235,9 @@ test_smoke.py     : 46 passed, 0 failed
 test_e2e.py       :  9 passed, 0 failed
 test_feature.py   : 64 passed, 0 failed
 test_ui.py        : 64 passed, 0 failed
-test_scrapling.py : 99 passed, 0 failed
+test_scrapling.py : 129 passed, 0 failed
 test_shell.py     : 35 passed, 0 failed
-合计              : 317 passed, 0 failed
+合计              : 347 passed, 0 failed
 ```
 
 > `test_scrapling.py` 中唯一联网的用例失败时会记为 **SKIP** 而非 FAIL，

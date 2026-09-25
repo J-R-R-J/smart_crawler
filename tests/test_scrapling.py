@@ -11,7 +11,10 @@
     .venv\\Scripts\\python.exe tests\\test_scrapling.py
 """
 import os
+import re
 import sys
+import shutil
+import tempfile
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS",
@@ -264,6 +267,13 @@ def test_extra_site_packages(se):
     check("site_packages_hint() 与 install_hint() 是两件不同的事",
           se.site_packages_hint() != se.install_hint(),
           "包未装 vs 浏览器未下载")
+    # 只装 fetchers：all = ai,shell 会额外拉 mcp / IPython / markdownify
+    # （连依赖树约 56 MB），而本项目只用四个引擎，用不到 shell 与 MCP 服务。
+    check("site_packages_hint() 装的是 [fetchers] 而不是 [all]",
+          "[fetchers]" in hint and "[all]" not in hint, hint)
+    check("SCRAPLING_EXTRA 常量就是 fetchers",
+          getattr(se, "SCRAPLING_EXTRA", "") == "fetchers",
+          repr(getattr(se, "SCRAPLING_EXTRA", None)))
 
     # 界面提示必须引用「装包」那条。用源码断言是有意的：
     # 调用错函数不会报错，只会显示一段看起来合理、实际误导的提示，
@@ -272,10 +282,41 @@ def test_extra_site_packages(se):
     if os.path.isfile(lp):
         with open(lp, "r", encoding="utf-8") as fh:
             ui_src = fh.read()
-        check("左面板提示用的是 site_packages_hint()",
+        check("左面板提示用的是 site_packages_hint()（装包那条）",
               "site_packages_hint()" in ui_src)
-        check("左面板没有误用 install_hint()（那是下载浏览器的提示）",
-              "se.install_hint()" not in ui_src)
+        check("左面板也用 install_hint()（浏览器未下载那条）",
+              "se.install_hint()" in ui_src)
+        # 关键不变式：讲「下载浏览器」的 install_hint() **只能**出现在
+        # 「包已装好但浏览器没下」那条分支里。它若出现在 browsers_ready()
+        # 判断之前，说明又退回到「包都没装却让用户去下载浏览器」的误导文案。
+        if "se.install_hint()" in ui_src and "browsers_ready()" in ui_src:
+            check("install_hint() 只出现在 browsers_ready() 分支之后",
+                  ui_src.index("browsers_ready()") < ui_src.index("se.install_hint()"))
+        else:
+            check("左面板区分了 browsers_ready() 分支", False,
+                  "缺少 browsers_ready() 或 install_hint()")
+        check("三种状态分开说明（包未装 / 浏览器未下 / 全就绪）",
+              "未检测到 Scrapling" in ui_src
+              and "四种引擎均可用" in ui_src
+              and "browsers_ready()" in ui_src)
+
+    # **整个界面层**都不许写死 Python 版本号。
+    # 上一轮只查了 left_panel.py 里一个具体字符串（"同为 Python 3.13"），
+    # 换成别的写法（"Python 3.13"、"3.13），"）就漏掉了 —— 改成扫全部 ui\*.py
+    # 的自由文本，任何形如 3.1x 的版本字面量都算违规（版本号只能来自
+    # scrapling_engine.python_tag()）。
+    ui_dir = os.path.join(ROOT, "ui")
+    offenders = []
+    if os.path.isdir(ui_dir):
+        for fn in sorted(os.listdir(ui_dir)):
+            if not fn.endswith(".py"):
+                continue
+            with open(os.path.join(ui_dir, fn), "r", encoding="utf-8") as fh:
+                for no, line in enumerate(fh, 1):
+                    if re.search(r"\b3\.1[0-9]\b", line):
+                        offenders.append(f"{fn}:{no}: {line.strip()}")
+    check("界面层没有写死 Python 版本号（版本一律取自 python_tag()）",
+          not offenders, " | ".join(offenders))
 
     mod_name = "_sc_ext_probe"
     probe = os.path.join(d, mod_name + ".py")
@@ -326,6 +367,184 @@ def test_extra_site_packages(se):
                         pass
 
 
+def test_extra_dir_appears_later(se):
+    """外挂目录**在程序运行之后**才出现时，也必须被认出来。
+
+    这是真实踩到的缺陷：``_prepare_import_path()`` 原本在第一次调用时无条件
+    把 ``_path_ready`` 置真并提前返回。如果那一刻目录还不存在，之后永远
+    不会再检查 —— 用户照着界面提示把 scrapling 装进去，程序却一直显示
+    「未检测到 Scrapling」，只有重启才行。
+
+    现在改成每次都重新确认目录是否已在 sys.path 里，本用例守住这个行为。
+    """
+    import shutil
+    import tempfile
+
+    saved_ready = se._path_ready
+    saved_dir = se.SITE_PACKAGES_DIR
+    saved_path = list(sys.path)
+
+    d = os.path.join(tempfile.gettempdir(), "_sc_late_dir")
+    try:
+        if os.path.isdir(d):
+            shutil.rmtree(d)
+
+        # 第一次检查时目录还不存在
+        se.SITE_PACKAGES_DIR = d
+        se._path_ready = False
+        se._prepare_import_path()
+        check("目录尚未出现时不加入 sys.path", d not in sys.path)
+
+        # 用户在程序运行期间把它建出来（照提示安装）
+        os.makedirs(d, exist_ok=True)
+
+        se._prepare_import_path()
+        check("目录后出现后能被加入 sys.path（不再被记忆值卡住）",
+              d in sys.path, f"dir_exists={os.path.isdir(d)} in_path={d in sys.path}")
+    finally:
+        sys.path[:] = saved_path
+        se._path_ready = saved_ready
+        se.SITE_PACKAGES_DIR = saved_dir
+        try:
+            shutil.rmtree(d)
+        except OSError:
+            pass
+
+
+def test_version_and_browsers(se):
+    """版本号与浏览器就绪判断：都必须**从运行环境推导**，不能写死。"""
+    tag = se.python_tag()
+    check("python_tag() 与当前解释器一致",
+          tag == f"{sys.version_info.major}.{sys.version_info.minor}", tag)
+    check("python_tag() 形如 X.Y",
+          tag.count(".") == 1 and tag.split(".")[0].isdigit(), tag)
+
+    # browsers_ready() 不能抛异常，且与 browsers_dir() 一致
+    try:
+        ready = se.browsers_ready()
+        check("browsers_ready() 返回布尔值", isinstance(ready, bool), repr(ready))
+    except Exception as exc:                       # pragma: no cover
+        check("browsers_ready() 不抛异常", False, f"{type(exc).__name__}: {exc}")
+
+    # 两个落点：外挂目录下、exe（源码运行即项目根）同级下，都叫 ms-playwright
+    dirs = se.browser_drop_dirs()
+    check("browser_drop_dirs() 给出两个落点",
+          len(dirs) == 2, str(dirs))
+    check("两个落点都叫 ms-playwright",
+          all(os.path.basename(p) == "ms-playwright" for p in dirs), str(dirs))
+    check("第二个落点与 BASE_DIR 同级（免安装版 = exe 同级）",
+          os.path.dirname(dirs[1]) == se.BASE_DIR, dirs[1])
+    check("第一个落点在外挂依赖目录下",
+          os.path.dirname(dirs[0]) == se.SITE_PACKAGES_DIR, dirs[0])
+
+    # install_hint() 必须把「解压浏览器增强包」这条路指出来，
+    # 否则免安装版用户只能看到「联网下载 700 MB」这一条路。
+    _ih2 = se.install_hint()
+    check("install_hint 给出可解压的落点目录",
+          "ms-playwright" in _ih2, _ih2.replace("\n", " | "))
+    check("install_hint 同时给出 scrapling install 这条路",
+          "install" in _ih2, _ih2.replace("\n", " | "))
+    check("install_hint 里的落点就是 browser_drop_dirs() 的推荐落点",
+          se.browser_drop_dirs()[1] in _ih2, _ih2.replace("\n", " | "))
+
+    # 「联网下载」那条路在**冻结版**必须带 PYTHONPATH。
+    # pip install --target 会把控制台脚本放进 <外挂目录>\Scripts\，
+    # 脚本启动时 sys.path[0] 是 Scripts\ 那一层，**不含外挂目录**，
+    # 于是 from scrapling.cli import main 直接 ModuleNotFoundError ——
+    # 程序自己的 sys.path 里有外挂目录，但那是本进程的事，
+    # 管不到用户在命令行里新起的进程。上一轮漏了这一条，写成了裸命令。
+    saved_frozen = getattr(sys, "frozen", None)
+    try:
+        sys.frozen = True                       # 伪装成 PyInstaller 冻结版
+        frozen_hint = se.install_hint()
+        flat = frozen_hint.replace("\n", " | ")
+        check("冻结版提示带 PYTHONPATH", "PYTHONPATH" in frozen_hint, flat)
+        check("冻结版提示的 PYTHONPATH 指向外挂依赖目录",
+              se.site_packages_dir() in frozen_hint, flat)
+        check("冻结版提示带 PLAYWRIGHT_BROWSERS_PATH",
+              "PLAYWRIGHT_BROWSERS_PATH" in frozen_hint, flat)
+        check("冻结版提示里两条 $env: 都在 install 之前出现",
+              frozen_hint.index("$env:PYTHONPATH")
+              < frozen_hint.index("install"), flat)
+
+        del sys.frozen
+        source_hint = se.install_hint()
+        check("源码运行的提示不需要 PYTHONPATH",
+              "PYTHONPATH" not in source_hint,
+              source_hint.replace("\n", " | "))
+    finally:
+        if saved_frozen is None:
+            if hasattr(sys, "frozen"):
+                del sys.frozen
+        else:
+            sys.frozen = saved_frozen
+
+    saved_env = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+    d = os.path.join(tempfile.gettempdir(), "_sc_browsers_probe")
+    try:
+        # 指向一个不存在的目录 -> 必须判为未就绪
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(d, "nope")
+        check("目录不存在时 browsers_ready() 为假", se.browsers_ready() is False)
+
+        # 指向一个空目录 -> 仍然是未就绪（空目录等于没下载）
+        os.makedirs(d, exist_ok=True)
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = d
+        check("空目录时 browsers_ready() 为假", se.browsers_ready() is False)
+
+        # 目录里只有说明文件（免安装版预置的 ms-playwright 文件夹被丢进一个 txt）
+        # -> 仍必须是未就绪。「目录非空即就绪」的旧判定法在这里会谎报
+        #    「四种引擎均可用」，正是本用例要守住的那条线。
+        with open(os.path.join(d, "把浏览器解压到这里.txt"),
+                  "w", encoding="utf-8") as fh:
+            fh.write("x")
+        check("目录里只有说明文件时 browsers_ready() 为假",
+              se.browsers_ready() is False)
+
+        # 只有 chromium 目录、但解压不完整（没有可执行文件）-> 仍是未就绪
+        chrome_dir = os.path.join(d, "chromium-1243", "chrome-win64")
+        os.makedirs(chrome_dir, exist_ok=True)
+        check("只有 chromium 目录、没有 chrome.exe 时仍为假",
+              se.browsers_ready() is False)
+
+        # 出现可执行文件 -> 就绪（路径依据 playwright/patchright 1.63.0 的
+        # registry 表：chromium-<rev>\\chrome-win64\\chrome.exe）
+        with open(os.path.join(chrome_dir, "chrome.exe"),
+                  "w", encoding="utf-8") as fh:
+            fh.write("x")
+        check("chromium 的 chrome.exe 存在时 browsers_ready() 为真",
+              se.browsers_ready() is True)
+
+        # headless shell 单独存在也要算就绪（两个浏览器目录任一即可：
+        # StealthyFetcher 默认 headless=True，走的就是 headless shell）
+        shutil.rmtree(os.path.join(d, "chromium-1243"))
+        shell_dir = os.path.join(d, "chromium_headless_shell-1243",
+                                 "chrome-headless-shell-win64")
+        os.makedirs(shell_dir, exist_ok=True)
+        with open(os.path.join(shell_dir, "chrome-headless-shell.exe"),
+                  "w", encoding="utf-8") as fh:
+            fh.write("x")
+        check("headless shell 单独存在时也算就绪", se.browsers_ready() is True)
+
+        # 非 chromium 名字的目录不算（例如 ffmpeg-1011 / winldd-1007）
+        shutil.rmtree(os.path.join(d, "chromium_headless_shell-1243"))
+        os.makedirs(os.path.join(d, "ffmpeg-1011"), exist_ok=True)
+        with open(os.path.join(d, "ffmpeg-1011", "ffmpeg-win64.exe"),
+                  "w", encoding="utf-8") as fh:
+            fh.write("x")
+        check("只有 ffmpeg 之类非浏览器目录时仍为假",
+              se.browsers_ready() is False)
+        shutil.rmtree(os.path.join(d, "ffmpeg-1011"))
+    finally:
+        if saved_env is None:
+            os.environ.pop("PLAYWRIGHT_BROWSERS_PATH", None)
+        else:
+            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = saved_env
+        try:
+            shutil.rmtree(d)
+        except OSError:
+            pass
+
+
 def main():
     from core import scrapling_engine as se
 
@@ -339,12 +558,19 @@ def main():
           se.FetchResult().ok is False and se.FetchResult().length == 0)
     check("FetchResult.length 反映 html 长度",
           se.FetchResult(html="abc").length == 3)
-    check("install_hint 含 scrapling install",
-          "scrapling install" in se.install_hint())
+    _ih = se.install_hint()
+    check("install_hint 指向 scrapling 的 install 子命令",
+          "install" in _ih and "scrapling" in _ih.lower(), _ih.replace("\n", " | "))
+    # scrapling 包里没有 __main__.py，`python -m scrapling install` 会直接报
+    # "No module named scrapling.__main__"（实测）。这条守住别退回去。
+    check("install_hint 不教用户用 python -m scrapling",
+          "-m scrapling" not in _ih)
 
     # 顶层重名守卫 + 外挂依赖目录（都不依赖 scrapling 是否安装）
     test_no_shadowed_top_level_defs(se)
     test_extra_site_packages(se)
+    test_extra_dir_appears_later(se)
+    test_version_and_browsers(se)
 
     # ---- 超时单位（浏览器引擎是毫秒，HTTP 是秒）----
     check("seconds_to_ms: 90 → 90000", se.seconds_to_ms(90) == 90000,
