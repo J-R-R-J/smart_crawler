@@ -18,7 +18,7 @@ from PySide6.QtCore import QCoreApplication, QEvent, QObject, QUrl, Signal, Slot
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineScript
 
-from config.constants import DATA_DIR, DOWNLOAD_DIR, PROFILE_DIR
+from config.constants import DATA_DIR, DOWNLOAD_DIR, ENGINE_DIR, PROFILE_DIR
 from config.js_scripts import STEALTH_JS
 from core.signals import get_signals
 from utils.js_runner import JsRunner
@@ -82,6 +82,90 @@ _DESKTOP_UA = (
 _PROFILE_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
+def _inject_base(html: str, base_url: str) -> str:
+    """在 HTML 的 <head> 之后注入 ``<base href>``。
+
+    用于把抓回来的 HTML 写到本地文件后加载的场景：此时文档的来源变成
+    ``file://``，若不注入 base，页面里的相对链接与资源都会指向本地而失效。
+    """
+    tag = f'<base href="{base_url}">'
+    low = html.lower()
+
+    for opener, needs_head in (("<head", False), ("<html", True)):
+        idx = low.find(opener)
+        if idx == -1:
+            continue
+        close = html.find(">", idx)
+        if close == -1:
+            continue
+        head = ("<head>" + tag + "</head>") if needs_head else tag
+        return html[:close + 1] + head + html[close + 1:]
+
+    return tag + html
+
+
+class CrawlerPage(QWebEnginePage):
+    """带「新窗口」兜底的页面类。
+
+    为什么必须重写 createWindow()
+    ----------------------------
+    ``QWebEnginePage.createWindow()`` 的默认实现返回 ``nullptr``，于是
+    ``<a target="_blank">`` 与 ``window.open()`` 发起的请求会被**静默丢弃**：
+    点下去没有任何反应，控制台也不报错，看起来就像「按钮坏了」。
+    这是 QtWebEngine 的既定行为，与具体站点无关。
+
+    本项目界面只有一块渲染视图，因此策略是把新窗口请求**接回当前视图**
+    （单视图爬虫的直觉行为：点了就能看到目标页，可以继续拾取 / 抓取），
+    同时发出 ``new_window_requested``，让上层能区分「站点开了新窗口」
+    与「页面自己跳转」。
+
+    下载不受影响：下载走 ``QWebEngineProfile.downloadRequested``，
+    与 createWindow 是两条完全独立的路径。
+    """
+
+    new_window_requested = Signal(str)      # 被接回当前视图的 URL
+
+    def __init__(self, profile, parent=None):
+        super().__init__(profile, parent)
+        self._redirect_new_windows = True
+        self._new_window_pending = False
+
+    @property
+    def redirect_new_windows(self) -> bool:
+        return self._redirect_new_windows
+
+    def set_redirect_new_windows(self, enabled: bool) -> None:
+        """置 False 可恢复 Qt 默认行为（丢弃新窗口请求）。"""
+        self._redirect_new_windows = bool(enabled)
+
+    def createWindow(self, window_type):    # noqa: N802 - 覆盖 Qt 命名
+        """返回 self，让新窗口请求在当前视图打开。
+
+        返回 self 是 Qt 允许的做法（要求新页面与请求方同 profile，
+        self 自然满足）。Chromium 随后就会在**这个** page 上发起导航，
+        因此接着会在 acceptNavigationRequest 里看到那个 URL。
+        """
+        if not self._redirect_new_windows:
+            return None
+        self._new_window_pending = True
+        return self
+
+    def acceptNavigationRequest(self, url, nav_type, is_main_frame):  # noqa: N802
+        """放行全部导航；顺带把「新窗口请求」上报一次。
+
+        createWindow 拿不到目标 URL（Qt 的接口就没给），所以在这里补报：
+        createWindow 与随后的导航请求是紧挨着的，用一个一次性标志配对。
+        """
+        if self._new_window_pending:
+            self._new_window_pending = False
+            if is_main_frame:
+                try:
+                    self.new_window_requested.emit(url.toString())
+                except Exception:
+                    pass
+        return True
+
+
 class Browser(QObject):
     """管理 WebEngine Profile / Page / JsRunner 与 QWebChannel 桥。"""
 
@@ -101,8 +185,11 @@ class Browser(QObject):
         self._old_refs = []       # 保留旧 page/profile/channel/bridge 引用直至销毁
 
         self._profile = self._create_profile()
-        self._page = QWebEnginePage(self._profile, self)
+        self._page = CrawlerPage(self._profile, self)
         self._js = JsRunner(self._page)
+
+        # 新窗口请求被接回当前视图时记一条日志（见 CrawlerPage 的说明）
+        self._page.new_window_requested.connect(self._on_new_window_requested)
 
         # ---- QWebChannel 桥接 ----
         self._bridge = JsBridge(self)
@@ -231,6 +318,42 @@ class Browser(QObject):
     def navigate(self, url: str) -> None:
         self._page.load(QUrl(url))
 
+    # setHtml 内部走 data URI，Qt 限制约 2MB；超过则改走临时文件 + <base>。
+    _SETHTML_MAX = 1_800_000
+
+    def load_html(self, html: str, base_url: str = "") -> bool:
+        """把外部抓到的 HTML 灌入渲染引擎（供非浏览器抓取引擎使用）。
+
+        非浏览器引擎（HTTP / Stealth / Dynamic）由 Scrapling 负责发起请求，
+        这里只把结果 HTML 交给同一个渲染引擎，从而完整复用既有的
+        检测 / 弹窗 / 提取 / 翻页流程。
+
+        返回 True 表示已提交加载。大于约 2MB 的文档不使用 setHtml
+        （Qt 会失败），改为写临时文件并注入 ``<base>``，
+        以保证相对链接仍按原站解析。
+        """
+        if not isinstance(html, str) or not html.strip():
+            log_warn("[browser] load_html 收到空 HTML，忽略")
+            return False
+
+        base = base_url or "about:blank"
+        if len(html) <= self._SETHTML_MAX:
+            self._page.setHtml(html, QUrl(base))
+            return True
+
+        try:
+            os.makedirs(ENGINE_DIR, exist_ok=True)
+            path = os.path.join(ENGINE_DIR, "fetched_page.html")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(_inject_base(html, base))
+            log_info(f"[browser] HTML 过大（{len(html)} 字节），改为本地文件加载")
+            self._page.load(QUrl.fromLocalFile(path))
+            return True
+        except OSError as e:
+            log_warn(f"[browser] 大文档落盘失败，退回 setHtml：{e}")
+            self._page.setHtml(html, QUrl(base))
+            return True
+
     def url(self) -> str:
         return self._page.url().toString()
 
@@ -255,6 +378,14 @@ class Browser(QObject):
     def set_popup_strategy(self, key: str) -> None:
         if key in ("notify", "close", "remove"):
             self._popup_strategy = key
+
+    def _on_new_window_requested(self, url: str) -> None:
+        """新窗口 / 新标签请求已接回当前视图。"""
+        log_info(f"[browser] 新窗口请求已接回当前视图：{url}")
+        try:
+            get_signals().log.emit("INFO", f"站点请求新窗口，已在当前视图打开：{url}")
+        except Exception:
+            pass
 
     # --------------------------------------------------------------
     # Profile 切换 / 销毁

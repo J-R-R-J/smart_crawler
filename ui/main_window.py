@@ -2,6 +2,7 @@
 """主窗口：组装所有面板 + 绑定信号。"""
 
 import os
+import sys
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
@@ -16,6 +17,7 @@ from core.cookie_manager import CookieManager
 from core.crawler      import Crawler
 from core.signals      import get_signals
 from core.user_prefs   import UserPrefs
+from utils import console
 from utils.logger      import log_info, log_warn
 
 from .top_bar      import TopBar
@@ -24,6 +26,31 @@ from .left_panel   import LeftPanel
 from .center_panel import CenterPanel
 from .right_panel  import RightPanel
 from .keyword_dialog import KeywordDialog
+
+
+def qss_candidates() -> list:
+    """样式表候选路径，按优先级排列。
+
+    为什么要多个候选：打包后 ui/ 下的 ``.py`` 进了 PYZ 归档，只有
+    ``datas`` 里显式声明的文件才会以**真实文件**形式存在于
+    ``_internal\\ui\\``。也就是说打包配置必须把 styles.qss 收进 datas
+    —— 漏掉就是「打包版没有样式」，而且只是一条 WARNING，很容易被忽略。
+    这里同时兜住源码运行、onedir、onefile 三种布局。
+    """
+    paths = [os.path.join(os.path.dirname(os.path.abspath(__file__)), "styles.qss")]
+
+    meipass = getattr(sys, "_MEIPASS", "")
+    if meipass:
+        paths.append(os.path.join(meipass, "ui", "styles.qss"))
+
+    try:
+        from config.constants import BASE_DIR
+        paths.append(os.path.join(BASE_DIR, "ui", "styles.qss"))
+        paths.append(os.path.join(BASE_DIR, "_internal", "ui", "styles.qss"))
+    except Exception:
+        pass
+
+    return paths
 
 
 class MainWindow(QMainWindow):
@@ -59,6 +86,7 @@ class MainWindow(QMainWindow):
         self.top_bar.set_popup_strategy(self.prefs.popup_strategy)
         self.right_panel.cookie_panel.attach_cookie_manager(self.cookie_manager)
         self.right_panel.cookie_panel.set_current_profile(self.browser.profile_name)
+        self._apply_console_pref()
 
         # 自动注入 WebChannel（首次打开 about:blank 时）
         self.browser.js.run(QWEBCHANNEL_JS)
@@ -130,12 +158,19 @@ class MainWindow(QMainWindow):
         self.status.showMessage("就绪")
 
     def _load_qss(self):
-        qss_path = os.path.join(os.path.dirname(__file__), "styles.qss")
-        try:
-            with open(qss_path, "r", encoding="utf-8") as f:
-                self.setStyleSheet(f.read())
-        except Exception as e:
-            log_warn(f"QSS 加载失败：{e}")
+        last_err = None
+        for path in qss_candidates():
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    self.setStyleSheet(f.read())
+                log_info(f"[ui] 样式表已加载：{path}")
+                return
+            except OSError as e:
+                last_err = e
+            except Exception as e:                    # 编码 / QSS 语法等
+                log_warn(f"QSS 加载失败：{e}")
+                return
+        log_warn(f"QSS 加载失败：{last_err}（候选路径：{qss_candidates()}）")
 
     # ==================================================================
     # 信号绑定
@@ -159,6 +194,7 @@ class MainWindow(QMainWindow):
         self.left_panel.clear_clicked.connect(self.right_panel.clear)
         self.left_panel.keywords_clicked.connect(self._on_keywords)
         self.left_panel.settings_changed.connect(self._on_run_settings)
+        self.left_panel.console_toggled.connect(self._on_console_toggled)
 
         # --- Browser → URL ---
         self.browser.url_changed.connect(self.top_bar.set_url)
@@ -211,6 +247,33 @@ class MainWindow(QMainWindow):
     def _on_popup_strategy(self, key: str):
         self.prefs.popup_strategy = key
         self.browser.set_popup_strategy(key)
+
+    # ------------------------------------------------------------------
+    # 控制台窗口
+    # ------------------------------------------------------------------
+    def _apply_console_pref(self) -> None:
+        """按偏好显示 / 隐藏控制台窗口。
+
+        正式版用 console 子系统打包（启动期报错、Chromium 警告、--selftest
+        输出都靠它），默认显示；用户取消勾选即隐藏。隐藏只是
+        ShowWindow(SW_HIDE)，stdout 仍在，日志照常写 crawler_data\\logs\\。
+        """
+        available = console.has_console()
+        want = bool(self.prefs.show_console)
+        if available:
+            console.set_visible(want)
+            if not want:
+                log_info("[console] 按偏好隐藏控制台窗口（日志仍写入文件）")
+        else:
+            log_info("[console] 当前进程没有控制台窗口，显示/隐藏开关不可用")
+        self.left_panel.set_console_visible(want, available)
+
+    def _on_console_toggled(self, visible: bool) -> None:
+        self.prefs.show_console = visible
+        if console.set_visible(visible):
+            log_info(f"[console] 控制台窗口已{'显示' if visible else '隐藏'}")
+        else:
+            log_warn("[console] 没有可操作的控制台窗口，设置已保存但不生效")
 
     # ------------------------------------------------------------------
     def _on_keywords(self):

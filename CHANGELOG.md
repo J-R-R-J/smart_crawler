@@ -5,6 +5,102 @@
 
 ---
 
+## [0.0.4] - 2026-09-25
+
+本批聚焦「抓取引擎扩展与自适应提取」，引入 **Scrapling 融合层**（可选依赖）。
+
+### 新增
+
+- **抓取引擎可选（左侧新增「② 抓取引擎（反检测）」组）**：页面 HTML 从哪里来
+  变成可配置项，四种引擎共用同一套检测 / 弹窗 / 提取 / 翻页 / 结果展示流程：
+  - **浏览器引擎**：QtWebEngine 自行请求并渲染（默认，兼容 JS 站点）；
+  - **HTTP 快速模式**：`curl_cffi` 伪装浏览器 TLS 指纹，**不启动浏览器**，
+    静态页速度提升一个数量级；
+  - **隐身引擎**：Scrapling `StealthyFetcher`，可自动过 Cloudflare 验证；
+  - **动态引擎**：Scrapling `DynamicFetcher`（Playwright），适合 JS 渲染重的页面。
+
+  关键点：反检测作用在**请求阶段**，取回 HTML 后灌入同一个渲染引擎，
+  因此后续所有既有能力无需改动即可复用。
+
+- **自适应选择器（网站改版自愈）**：勾选后，常规选择器提取不到数据时，
+  改用 Scrapling 依据此前保存的元素特征重新定位元素。
+  实测：容器 class 由 `old-card` 整体改为 `brand-new-card` 后，
+  原选择器返回 0 条，开启自适应后成功找回全部记录。
+
+- **高级选择器语法**：字段子选择器支持 `::text`、`::attr(name)`、
+  XPath、正则等写法，与原有 `text / href / src / html / attr` 类型并存。
+
+- **`core/scrapling_engine.py`**：统一融合层。惰性导入、可选依赖、
+  未安装时静默降级；对外返回与 `core.extractor` 相同形状的 `list[dict]`。
+  自适应特征库落在 `crawler_data/scrapling_adaptive.db`（不写 cwd）。
+
+- **`core/browser.py` 新增 `load_html()`**：把外部抓到的 HTML 灌入渲染引擎。
+  超过约 2MB 的文档自动改走本地文件加载，并注入 `<base href>`，
+  保证相对链接仍按原站解析（绕开 `setHtml` 的体积限制）。
+
+- **`tests/test_scrapling.py`**：99 项断言，覆盖解析、自适应自愈、
+  降级路径、接入层（Task 字段 / 左面板 / 偏好 / `<base>` 注入）、外挂依赖目录，
+  外加两条**防静默故障**的守卫（顶层重名检测、外挂目录真实性验证）。
+
+- **外挂依赖目录**：冻结版会把 `crawler_data/site-packages` 追加到 `sys.path`，
+  因此免安装版也能用非浏览器引擎（把 Scrapling `pip --target` 装到那里即可，
+  不必改安装目录）。`PLAYWRIGHT_BROWSERS_PATH` 已设置时不覆盖。
+  新增 `scrapling_engine.probe()`（`find_spec`，不真正导入）供界面提示使用。
+
+- **控制台窗口运行期开关**：正式版改用 console 子系统打包并**默认保留控制台**，
+  界面「④ 执行」新增「显示控制台窗口」，可随时隐藏 / 显示，偏好持久化。
+  隐藏只是 `ShowWindow(SW_HIDE)`，日志照常写文件。新增 `utils/console.py`。
+
+### 修复
+
+- **打包版完全没有样式**：spec 的 `datas` 是空的，而 PyInstaller 不会自动收集
+  `.qss` 这类非 `.py` 文件，导致 `ui/styles.qss` 从未进过包
+  （v0.0.2 ~ v0.0.4 的产物都是无样式裸控件）。现在显式声明 `datas`，
+  并给 `ui/main_window.py` 加了多路径兜底与「失败时打印全部候选路径」。
+
+- **窗口左上角没有图标**：`QApplication` 从未调用过 `setWindowIcon()`，
+  而 Qt 不会自动继承 exe 资源里的图标。新增 `utils/appicon.py` 负责取图，
+  找不到图标文件时用矢量现画。顺带修正 `appicon.ico` 只有一张 256×256 的问题
+  （标题栏要 16×16，系统缩放会糊）：现在是 16/32/48/64/256 **原生尺寸**。
+
+- **点击 `target="_blank"` 链接没有反应**：`QWebEnginePage.createWindow()`
+  默认返回 `nullptr`，新窗口请求被静默丢弃（不报错、不跳转）。
+  新增 `core/browser.CrawlerPage` 把请求接回当前视图，并在日志中说明。
+  `tests/test_shell.py` 用**真实 WebEngine 导航**验证该行为。
+
+- **`StealthyFetcher` / `DynamicFetcher` 超时被当作毫秒**：
+  同一库内两套刻度（`Fetcher` 用秒，浏览器引擎用毫秒），原先把 60 秒传成
+  60 毫秒，页面必然导航超时（`Page.goto: Timeout 60ms exceeded`）。
+  现在对外统一用秒，浏览器引擎在传参前换算并设下限。
+
+- **函数重名导致提示失效**：`core/scrapling_engine.py` 里 `install_hint`
+  被定义了两次（一次是「下载浏览器」的提示，一次是新增的「装包到外挂目录」
+  的提示），后一个静默覆盖前一个 —— 于是界面「装到外挂目录」的提示永远不会
+  显示，反而在包没装时让人去跑 `scrapling install`。已改名为
+  `site_packages_hint()` 并同步 `ui/left_panel.py` 与 `--selftest`。
+  Python 对重名函数不报错也不警告，测试里补了「顶层不得重名」的 AST 守卫。
+
+- `test_packaging.py` 的源码窗口截取过于脆弱（固定长度窗口，函数一变长就误报）；
+  改为按函数边界截取，并新增「spec 必须把 styles.qss 收进 datas 且真的传给
+  `Analysis`」「数据文件不能被 `_drop_data` 误筛」「正式版默认保留控制台」
+  三项防回归测试。
+
+### 变更
+
+- `requirements.txt` 补全 Scrapling 可选依赖的安装说明与打包建议。
+- `Task` 新增 `engine` / `adaptive` / `engine_timeout` 字段并纳入校验；
+  用户偏好新增 `last_engine` / `last_adaptive` 持久化。
+
+### 说明
+
+- **可选依赖**：未安装 Scrapling 时，非浏览器引擎会在抓取时自动回退为
+  浏览器引擎并提示原因，程序其余功能完全不受影响。
+- 实测基于 **scrapling 0.4.15**（Python 3.13）。注意该版本中入口类为
+  `Selector`，旧文档里的 `Adaptor` 已改名；`auto_save` 必须配合
+  `Selector(..., adaptive=True)` 才会生效。
+
+---
+
 ## [0.0.3] - 2026-09-20
 
 本版聚焦「界面可用性 + 反检测加固 + 下载控制」。
@@ -143,6 +239,7 @@
 - 结果导出 CSV / JSON，日志按天落盘并轮转。
 - 单进程软渲染默认开启，可在容器 / 无 GPU / 远程桌面环境下运行。
 
+[0.0.4]: https://github.com/J-R-R-J/smart_crawler/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/J-R-R-J/smart_crawler/compare/v0.0.2...v0.0.3
 [0.0.2]: https://github.com/J-R-R-J/smart_crawler/releases/tag/v0.0.2
 [0.0.1]: https://github.com/J-R-R-J/smart_crawler/releases

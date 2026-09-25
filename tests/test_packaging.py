@@ -329,6 +329,130 @@ class SpecFilterTests(unittest.TestCase):
         for mod in ("tkinter", "setuptools", "numpy", "PIL"):
             self.assertIn(mod, excludes, f"应排除 {mod}")
 
+    # ----------------------------------------------------------------
+    # Scrapling 融合层：有意不打进包，必须整条依赖链都排除
+    # ----------------------------------------------------------------
+    #  如果只排 scrapling 而漏掉它的依赖，PyInstaller 仍可能把
+    #  playwright / curl_cffi 之类的重依赖拖进产物；
+    #  反过来若漏排 scrapling 本身，产物会暴涨数百 MB。
+    def test_excludes_scrapling_stack(self):
+        excludes = self.ns["EXCLUDES"]
+        required = (
+            "scrapling",                     # 顶层
+            "curl_cffi",                     # HTTP 引擎
+            "playwright", "patchright", "camoufox",   # 浏览器引擎
+            "browserforge", "apify_fingerprint_datapoints",
+            "greenlet", "pyee",              # playwright 运行时依赖
+            "cssselect", "w3lib", "tld", "orjson", "msgspec",
+            "protego", "anyio",
+            "markdownify", "mcp", "IPython",  # [all] 额外带入
+        )
+        for mod in required:
+            self.assertIn(mod, excludes, f"应排除 {mod}")
+
+    # ---- 随包分发的数据文件 ----
+    def test_bundles_stylesheet_in_datas(self):
+        """spec 必须把 ui/styles.qss 收进 datas，并真的交给 Analysis。
+
+        PyInstaller **不会**自动收集 .qss 这类非 .py 文件；漏掉的后果是
+        「打包版一点样式都没有」，而代码里只有一条 WARNING，界面照样显示，
+        所以这个错误极容易被忽略 —— 本项目就真的漏掉过（v0.0.2 ~ v0.0.4
+        的包全都没有样式）。这条测试专门钉住它。
+
+        这里不看源码字符串，而是**执行 spec** 后直接检查传进 Analysis 的
+        参数，因此「声明了 DATAS 却忘了传给 Analysis」也会被抓出来。
+        """
+        datas = self.ns["DATAS"]
+        dests = [str(d[0]).replace("\\", "/") for d in datas]
+        targets = [str(d[1]).replace("\\", "/") for d in datas]
+        self.assertTrue(
+            any(p.lower().endswith("ui/styles.qss") for p in dests),
+            f"DATAS 应包含 ui/styles.qss，实际：{dests}")
+        self.assertIn("ui", targets, f"styles.qss 的目标目录应为 ui/，实际：{targets}")
+
+        passed = self.ns["a"].kwargs.get("datas")
+        self.assertIs(passed, datas, "DATAS 必须传给 Analysis(datas=...)")
+
+    def test_bundled_data_survives_drop_filter(self):
+        """刚加进 datas 的数据文件不能被 _drop_data 又筛掉。
+
+        过滤规则里有一堆「包含 /scripts/、/doc/ 就丢」的判定，数据文件
+        一旦踩到就会静默消失 —— 必须验证它们活着通过过滤器。
+        """
+        drop = self.ns["_drop_data"]
+        toc = [("ui/styles.qss", "ui/styles.qss", "DATA")]
+        for entry in toc:
+            self.assertFalse(drop(entry), f"被误删：{entry[0]}")
+        # 图标若存在也应能通过
+        for name in ("appicon.ico", "appicon.png"):
+            self.assertFalse(drop((name, name, "DATA")), f"被误删：{name}")
+
+    def test_release_keeps_console_by_default(self):
+        """正式版默认**保留**控制台；只有 SC_CONSOLE=0 才去掉。
+
+        保留控制台是为了让启动期崩溃、Qt/Chromium 的 WARNING 和 --selftest
+        的输出还能被看到（GUI 子系统出错时是「双击没反应，什么都没有」）。
+        运行期想隐藏它，由界面的「显示控制台窗口」开关负责，不需要重新打包。
+        """
+        self.assertTrue(self.ns["CONSOLE"], "默认应保留控制台")
+        self.assertTrue(self.ns["exe"].kwargs.get("console"),
+                        "EXE(console=...) 应为 True")
+
+        saved = os.environ.get("SC_CONSOLE")
+        try:
+            os.environ["SC_CONSOLE"] = "0"
+            ns2 = load_spec(SPEC_PATH)
+            self.assertFalse(ns2["CONSOLE"], "SC_CONSOLE=0 应去掉控制台")
+            os.environ["SC_CONSOLE"] = "1"
+            ns3 = load_spec(SPEC_PATH)
+            self.assertTrue(ns3["CONSOLE"], "SC_CONSOLE=1 应保留控制台")
+        finally:
+            if saved is None:
+                os.environ.pop("SC_CONSOLE", None)
+            else:
+                os.environ["SC_CONSOLE"] = saved
+
+    def test_scrapling_absent_from_bundle_is_safe(self):
+        """包里没有 scrapling 时，引擎必须能安全降级而不是崩。
+
+        直接检查源码：core/scrapling_engine.py 的导入点必须包在
+        try/except 里，available() 才能在 ImportError 时返回 False。
+        """
+        engine = os.path.join(ROOT, "core", "scrapling_engine.py")
+        if not os.path.isfile(engine):
+            self.skipTest("core/scrapling_engine.py 不存在")
+        with open(engine, "r", encoding="utf-8") as fh:
+            src = fh.read()
+        self.assertIn("def available", src)
+        self.assertIn("def unavailable_reason", src)
+
+        # 惰性导入必须被 try/except 包住。
+        # 注意 1：模块文档字符串里也出现过 `import scrapling` 字样，
+        #         所以必须先定位到 _load() 函数，再在它之后找导入语句。
+        # 注意 2：取**整个函数体**（到下一个顶格 def / class 为止），
+        #         不能用固定长度窗口 —— 函数一变长就会把 except 挤出窗口，
+        #         从而误报「没有 except 兜底」（真的这样误报过一次）。
+        fn = src.find("def _load")
+        self.assertGreater(fn, 0, "应有 _load() 惰性导入函数")
+        end = len(src)
+        for marker in ("\ndef ", "\nclass "):
+            pos = src.find(marker, fn + 1)
+            if pos != -1:
+                end = min(end, pos)
+        body = src[fn:end]
+
+        imp = body.find("import scrapling")
+        self.assertGreater(imp, 0, "应在 _load() 内找到 import scrapling")
+        self.assertIn("try:", body, "scrapling 导入必须在 try 中")
+        self.assertIn("except", body, "scrapling 导入必须有 except 兜底")
+
+        # 降级返回空结果而不是抛异常
+        self.assertIn("return []", src)
+        self.assertIn("FetchResult(ok=False", src)
+        # 外挂依赖目录：冻结版要能把用户 pip --target 装进去的 scrapling 找出来
+        self.assertIn("def site_packages_dir", src)
+        self.assertIn("sys.path.append", src)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -6,12 +6,13 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox,
     QListWidget, QListWidgetItem, QLineEdit, QPlainTextEdit,
     QSpinBox, QDoubleSpinBox, QCheckBox, QPushButton, QLabel,
-    QScrollArea, QFrame,
+    QScrollArea, QFrame, QComboBox,
 )
 
 from config.default_settings import (
     SUPPORTED_FORMATS, FORMAT_LABELS, FORMAT_HINTS,
     NEEDS_SELECTOR, NEEDS_FIELDS, NEEDS_PATTERN,
+    ENGINE_OPTIONS, DEFAULT_ENGINE, DEFAULT_ADAPTIVE,
 )
 from models.field import Field
 from models.task  import Task
@@ -24,6 +25,7 @@ class LeftPanel(QWidget):
     clear_clicked   = Signal()
     keywords_clicked = Signal()          # 打开「检测关键词设置」
     settings_changed = Signal()          # 反爬 / 下载上限发生变化
+    console_toggled  = Signal(bool)      # 显示 / 隐藏控制台窗口
 
     def __init__(self, prefs: UserPrefs, parent=None):
         super().__init__(parent)
@@ -117,8 +119,39 @@ class LeftPanel(QWidget):
 
         lay.addWidget(g1)
 
-        # ---------- ② 翻页与节奏 ----------
-        g2 = QGroupBox("② 翻页与抓取节奏")
+        # ---------- ② 抓取引擎（反检测） ----------
+        g_engine = QGroupBox("② 抓取引擎（反检测）")
+        f_engine = QFormLayout(g_engine)
+
+        self.engine_combo = QComboBox()
+        for key, label, hint in ENGINE_OPTIONS:
+            self.engine_combo.addItem(label, key)
+            self.engine_combo.setItemData(
+                self.engine_combo.count() - 1, hint,
+                Qt.ItemDataRole.ToolTipRole)
+        self.engine_combo.setToolTip(
+            "决定页面 HTML 从哪里来。后三种由 Scrapling 提供，\n"
+            "反检测作用在「请求阶段」；取回后仍走同一套检测 / 提取 / 翻页流程。\n"
+            "未安装 Scrapling 时会自动回退为浏览器引擎。")
+        f_engine.addRow("引擎：", self.engine_combo)
+
+        self.adaptive_chk = QCheckBox("启用自适应选择器（网站改版自愈）")
+        self.adaptive_chk.setToolTip(
+            "常规选择器提取不到数据时，用 Scrapling 依据此前保存的元素特征\n"
+            "重新定位元素。需先成功抓取过一次以保存特征。\n"
+            "仅对「结构化记录」格式生效。")
+        self.adaptive_chk.setChecked(bool(DEFAULT_ADAPTIVE))
+        f_engine.addRow("", self.adaptive_chk)
+
+        self.engine_hint = QLabel("")
+        self.engine_hint.setObjectName("hintLabel")
+        self.engine_hint.setWordWrap(True)
+        f_engine.addRow("", self.engine_hint)
+
+        lay.addWidget(g_engine)
+
+        # ---------- ③ 翻页与节奏 ----------
+        g2 = QGroupBox("③ 翻页与抓取节奏")
         f2 = QFormLayout(g2)
 
         self.next_edit = QLineEdit()
@@ -163,8 +196,8 @@ class LeftPanel(QWidget):
 
         lay.addWidget(g2)
 
-        # ---------- ③ 执行 ----------
-        g3 = QGroupBox("③ 执行")
+        # ---------- ④ 执行 ----------
+        g3 = QGroupBox("④ 执行")
         v3 = QVBoxLayout(g3)
 
         self.btn_start = QPushButton("开始抓取")
@@ -181,6 +214,17 @@ class LeftPanel(QWidget):
         row.addWidget(self.btn_stop)
         row.addWidget(self.btn_clear)
         v3.addLayout(row)
+
+        # 控制台开关。正式版用 console 子系统打包（这样启动期崩溃、Qt/Chromium
+        # 的 WARNING、--selftest 的输出都还看得到），默认显示；隐藏只是
+        # ShowWindow(SW_HIDE)，进程与日志都不受影响，随时可以再打开。
+        self.console_chk = QCheckBox("显示控制台窗口（排查用）")
+        self.console_chk.setToolTip(
+            "正式版保留控制台：启动期报错、Chromium 警告、自检输出都在这里。\n"
+            "取消勾选只是隐藏窗口，程序与日志（crawler_data\\logs\\）不受影响，\n"
+            "随时可以再勾回来。用 pythonw 启动源码、或打包时设了 SC_CONSOLE=0 时，\n"
+            "没有控制台可显示，此项会自动置灰。")
+        v3.addWidget(self.console_chk)
 
         lay.addWidget(g3)
         lay.addStretch(1)
@@ -200,7 +244,13 @@ class LeftPanel(QWidget):
             lambda _v: self.settings_changed.emit())
         self.download_exts_edit.textChanged.connect(
             lambda _t: self.settings_changed.emit())
+        self.engine_combo.currentIndexChanged.connect(
+            lambda _i: self.refresh_engine_hint())
+        self.adaptive_chk.toggled.connect(
+            lambda _v: self.refresh_engine_hint())
+        self.console_chk.toggled.connect(self.console_toggled)
 
+        self.refresh_engine_hint()
         self._update_hints()
 
     # ==================================================================
@@ -215,6 +265,50 @@ class LeftPanel(QWidget):
     def download_exts(self) -> str:
         return self.download_exts_edit.text().strip()
 
+    # ------------------------------------------------------------------
+    # 抓取引擎 / 自适应
+    # ------------------------------------------------------------------
+    def engine(self) -> str:
+        """当前选择的抓取引擎 key（browser / http / stealth / dynamic）。"""
+        return str(self.engine_combo.currentData() or DEFAULT_ENGINE)
+
+    def adaptive_enabled(self) -> bool:
+        return self.adaptive_chk.isChecked()
+
+    def set_engine(self, engine: str, adaptive: bool = False) -> None:
+        """按 key 选中引擎并设置自适应开关（用于恢复偏好）。"""
+        idx = self.engine_combo.findData(str(engine or DEFAULT_ENGINE))
+        self.engine_combo.blockSignals(True)
+        self.engine_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.engine_combo.blockSignals(False)
+        self.adaptive_chk.setChecked(bool(adaptive))
+        self.refresh_engine_hint()
+
+    def refresh_engine_hint(self) -> None:
+        """按 Scrapling 是否可用来提示引擎可用性。
+
+        这里用 ``scrapling_engine.probe()``（内部 find_spec）而**不是**真正
+        import：仅为了显示一行提示，没必要在启动阶段就把 scrapling
+        （连带 playwright）加载进来。真正的导入发生在开始抓取时。
+
+        probe() 会先把外挂依赖目录（crawler_data/site-packages）加进
+        sys.path，因此「把 scrapling 装到外挂目录」这种用法也能被认出来。
+        """
+        from core import scrapling_engine as se
+        found = se.probe()
+
+        if found:
+            self.engine_hint.setText("Scrapling 已就绪，四种引擎均可用。")
+        elif self.engine() == "browser":
+            self.engine_hint.setText(
+                "未检测到 Scrapling；浏览器引擎不受影响。\n"
+                f"要用其它引擎，可安装到外挂目录：{se.site_packages_hint()}")
+        else:
+            self.engine_hint.setText(
+                "未检测到 Scrapling，该引擎将在抓取时自动回退为浏览器引擎。\n"
+                f"安装到外挂目录即可（需与本程序同为 Python 3.13）：\n"
+                f"{se.site_packages_hint()}")
+
     def set_run_settings(self, stealth: bool, max_download_mb: int,
                          download_exts: str = "") -> None:
         widgets = (self.stealth_chk, self.download_spin,
@@ -226,6 +320,27 @@ class LeftPanel(QWidget):
         self.download_exts_edit.setText(str(download_exts or ""))
         for w in widgets:
             w.blockSignals(False)
+
+    # ------------------------------------------------------------------
+    # 控制台窗口
+    # ------------------------------------------------------------------
+    def console_visible(self) -> bool:
+        return bool(self.console_chk.isChecked())
+
+    def set_console_visible(self, visible: bool, available: bool = True) -> None:
+        """同步控制台勾选框（不触发 console_toggled）。
+
+        ``available=False``（进程压根没有控制台，例如用 pythonw.exe 跑源码）
+        时置灰并换一条说明，避免给出一个勾了也不生效的开关。
+        """
+        self.console_chk.blockSignals(True)
+        self.console_chk.setChecked(bool(visible))
+        self.console_chk.blockSignals(False)
+        self.console_chk.setEnabled(bool(available))
+        if not available:
+            self.console_chk.setToolTip(
+                "当前运行方式没有控制台窗口（例如用 pythonw.exe 启动源码）。\n"
+                "打包版默认带控制台，此项可用。")
 
     # ==================================================================
     # 格式多选
@@ -283,6 +398,8 @@ class LeftPanel(QWidget):
         self.delay_spin.setValue(p.last_delay)
         self.max_pages_spin.setValue(p.last_max_pages)
         self.autoscroll_chk.setChecked(p.last_autoscroll)
+        self.set_engine(getattr(p, "last_engine", DEFAULT_ENGINE),
+                        getattr(p, "last_adaptive", DEFAULT_ADAPTIVE))
         self.set_run_settings(p.stealth_enabled, p.max_download_mb,
                               p.download_exts)
 
@@ -303,6 +420,8 @@ class LeftPanel(QWidget):
             max_pages=self.max_pages_spin.value(),
             delay=self.delay_spin.value(),
             autoscroll=self.autoscroll_chk.isChecked(),
+            engine=self.engine(),
+            adaptive=self.adaptive_enabled(),
         )
 
         # 记忆偏好
@@ -312,6 +431,8 @@ class LeftPanel(QWidget):
         p.last_delay = task.delay
         p.last_max_pages = task.max_pages
         p.last_autoscroll = task.autoscroll
+        p.last_engine = task.engine
+        p.last_adaptive = task.adaptive
 
         return task
 

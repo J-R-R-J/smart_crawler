@@ -87,6 +87,36 @@ DEFAULT_EXPORT_DIR = ""
 # 反爬对抗默认开关（浏览器特征伪装 + 拟人化延迟抖动）
 DEFAULT_STEALTH_ENABLED = True
 
+# ----------------------------------------------------------------------
+# 抓取引擎：决定「页面 HTML 从哪里来」。
+#
+# 四种引擎最终都会把 HTML 交给同一个渲染引擎与既有流程
+# （检测 → 弹窗 → 提取 → 翻页），差别只在**请求是怎么发出的**：
+#   · browser 由 QtWebEngine 自己请求并渲染；
+#   · 其余三种由 Scrapling 先取回 HTML，再灌入渲染引擎。
+# 好处是反检测发生在**请求阶段**（curl_cffi/stealth 浏览器指纹），
+# 而后续解析、翻页、结果展示完全复用现有代码。
+# ----------------------------------------------------------------------
+ENGINE_OPTIONS = [
+    ("browser", "浏览器引擎", "QtWebEngine 自行请求并渲染（默认，兼容 JS 站点）"),
+    ("http", "HTTP 快速模式", "curl_cffi 伪装浏览器 TLS 指纹，不开浏览器，静态页最快"),
+    ("stealth", "隐身引擎", "Scrapling StealthyFetcher，可自动过 Cloudflare 验证"),
+    ("dynamic", "动态引擎", "Scrapling DynamicFetcher（Playwright），适合 JS 重的页面"),
+]
+ENGINE_LABELS = {key: label for key, label, _hint in ENGINE_OPTIONS}
+ENGINE_HINTS = {key: hint for key, _label, hint in ENGINE_OPTIONS}
+
+DEFAULT_ENGINE = "browser"
+DEFAULT_ADAPTIVE = False          # 是否启用自适应选择器（网站改版自愈）
+DEFAULT_ENGINE_TIMEOUT = 30.0     # 非浏览器引擎的单页超时（秒）
+
+# ----------------------------------------------------------------------
+# 控制台窗口：正式版 exe 用 console 子系统打包（启动期报错、Qt/Chromium 警告
+# 都还能看到），默认显示；用户可在界面里随时隐藏 / 显示，偏好持久化。
+# 隐藏只是 ShowWindow(SW_HIDE)，日志照常写 crawler_data\logs\。
+# ----------------------------------------------------------------------
+DEFAULT_SHOW_CONSOLE = True
+
 __all__ = [
     "SUPPORTED_FORMATS", "FORMAT_LABELS", "FORMAT_HINTS",
     "CAPTCHA_KEYWORDS", "HUMAN_VERIFY_KEYWORDS",
@@ -96,4 +126,7 @@ __all__ = [
     "NEEDS_SELECTOR", "NEEDS_FIELDS", "NEEDS_PATTERN",
     "DEFAULT_MAX_DOWNLOAD_MB", "DEFAULT_DOWNLOAD_EXTS",
     "DEFAULT_EXPORT_DIR", "DEFAULT_STEALTH_ENABLED",
+    "ENGINE_OPTIONS", "ENGINE_LABELS", "ENGINE_HINTS",
+    "DEFAULT_ENGINE", "DEFAULT_ADAPTIVE", "DEFAULT_ENGINE_TIMEOUT",
+    "DEFAULT_SHOW_CONSOLE",
 ]

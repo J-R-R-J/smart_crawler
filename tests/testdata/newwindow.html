@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>new window test</title></head>
+<body>
+  <h1>新窗口 / 新标签请求测试</h1>
+  <p id="marker">ORIGIN_PAGE</p>
+
+  <!-- 场景 1：target="_blank" 链接（deepseek.com 那类按钮的形态） -->
+  <a id="ext" href="page1.html" target="_blank">target=_blank 链接</a>
+
+  <!-- 场景 2：window.open() 脚本开窗 -->
+  <a id="ext_js" href="page2.html" target="_blank">window.open 脚本</a>
+  <button id="btn_open" onclick="window.open('page2.html','_blank')">脚本开窗</button>
+</body>
+</html>

@@ -51,8 +51,9 @@ _SELFTEST_MODULES = (
     "models.field", "models.task", "models.record",
     "core.signals", "core.user_prefs", "core.browser", "core.cookie_manager",
     "core.detector", "core.extractor", "core.picker", "core.pager",
-    "core.popup_handler", "core.crawler",
+    "core.popup_handler", "core.scrapling_engine", "core.crawler",
     "utils.logger", "utils.exporters", "utils.js_runner", "utils.maintenance",
+    "utils.console", "utils.appicon",
     "ui.top_bar", "ui.banner", "ui.left_panel", "ui.center_panel",
     "ui.right_panel", "ui.cookie_panel", "ui.keyword_dialog", "ui.main_window",
 )
@@ -101,6 +102,38 @@ def run_selftest() -> int:
     if not os.path.isdir(DATA_DIR):
         failed.append(("crawler_data", "目录不存在"))
 
+    # 可选依赖：Scrapling 融合层。
+    # 打包产物**有意不包含**它，因此这里显示「未安装」属于正常现象，
+    # 不是错误：非浏览器引擎会在抓取时自动回退为浏览器引擎。
+    try:
+        from core import scrapling_engine as _se
+        if _se.available():
+            emit(f"scrapling: {_se.version()} 已就绪"
+                 f"（HTTP 快速模式 / 隐身引擎 / 动态引擎 / 自适应选择器可用）")
+        else:
+            reason = _se.unavailable_reason() or "未安装"
+            emit(f"scrapling: 不可用（{reason}）"
+                 f" —— 非浏览器引擎将回退为浏览器引擎，其余功能不受影响")
+            emit(f"          可安装到外挂目录：{_se.site_packages_dir()}")
+            emit(f"          {_se.site_packages_hint()}")
+    except Exception as e:
+        emit(f"scrapling: 状态检测跳过（{type(e).__name__}: {e}）")
+
+    # 窗口图标 / 控制台：这两个是「界面外壳」问题，打包后最容易只剩空白，
+    # 因此自检里直接报出实际取值，省得靠肉眼判断。
+    try:
+        from utils.appicon import icon_file
+        emit(f"window_icon: {icon_file() or '未找到图标文件，将用内置绘制图标'}")
+    except Exception as e:
+        emit(f"window_icon: 检测失败（{type(e).__name__}: {e}）")
+
+    try:
+        from utils import console
+        emit(f"console: {'有控制台窗口（可显示/隐藏）' if console.has_console() else '无控制台窗口'}"
+             f"  visible={console.is_visible()}")
+    except Exception as e:
+        emit(f"console: 检测失败（{type(e).__name__}: {e}）")
+
     emit(f"modules: {ok} ok, {len(failed)} failed")
     for name, err in failed:
         emit(f"  FAILED {name}: {err}")
@@ -128,6 +161,28 @@ def _install_excepthook():
         sys.__excepthook__(exc_type, exc_value, exc_tb)
 
     sys.excepthook = _hook
+
+
+def _apply_window_icon(app) -> None:
+    """设置窗口图标（标题栏左上角 / 任务栏 / Alt+Tab）。
+
+    这件事**必须显式做**：QApplication 不会自动继承 exe 资源里的图标，
+    不调用 ``setWindowIcon()`` 窗口左上角就是空白 —— 这正是「打包版没有
+    图标」的原因。图标优先取 appicon.ico（打包时随 datas 分发），
+    找不到就用 utils.appicon 现画一个，保证任何运行方式下都不空白。
+    """
+    from utils.logger import log_info, log_warn
+    try:
+        from utils.appicon import app_icon, icon_file, search_dirs
+        app.setWindowIcon(app_icon())
+        path = icon_file()
+        if path:
+            log_info(f"[ui] 窗口图标：{path}")
+        else:
+            log_info(f"[ui] 窗口图标：内置绘制（未找到图标文件，已搜索 "
+                     f"{len(search_dirs())} 个目录）")
+    except Exception as e:
+        log_warn(f"[ui] 窗口图标设置失败：{e}")
 
 
 def main():
@@ -163,6 +218,9 @@ def main():
     app.setApplicationName("SmartCrawler")
     app.setOrganizationName("SmartCrawler")
     app.setFont(QFont("Microsoft YaHei UI", 9))
+
+    # ---- 窗口图标（标题栏左上角；不设置就是空白） ----
+    _apply_window_icon(app)
 
     # ---- 全局异常钩子（日志已就绪后生效） ----
     _install_excepthook()

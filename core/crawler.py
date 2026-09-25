@@ -13,7 +13,7 @@ import json
 import random
 import time
 
-from PySide6.QtCore import QObject, QTimer
+from PySide6.QtCore import QObject, QThread, QTimer, Signal
 
 from config.default_settings import DETECT_INTERVAL_MS
 from config.js_scripts import (
@@ -25,6 +25,7 @@ from core.extractor import Extractor
 from core.pager import Pager
 from core.picker import Picker
 from core.popup_handler import PopupHandler
+from core import scrapling_engine
 from core.signals import get_signals
 from models.record import RecordSet
 from utils.logger import log_info, log_warn
@@ -35,6 +36,46 @@ STATES = ["IDLE", "NAVIGATING", "WAIT_LOAD", "EXTRACTING",
 
 _RUNNING = ("NAVIGATING", "WAIT_LOAD", "EXTRACTING", "PAGINATING", "HUMAN_WAIT")
 _BLOCKING = ("CAPTCHA", "HUMAN", "LOGIN")
+
+
+# 非浏览器引擎使用：在后台线程用 Scrapling 取回 HTML。
+# 用 QThread 而不是普通线程，是为了让 done 信号跨线程投递到主线程事件循环，
+# 避免在子线程里碰 Qt 对象。
+_BROWSER_ENGINES = ("browser", "")
+
+
+class _EngineFetcher(QThread):
+    """后台执行 Scrapling 抓取，完成后把 FetchResult 发回主线程。"""
+
+    done = Signal(object)
+
+    def __init__(self, engine: str, url: str, timeout: float, parent=None):
+        super().__init__(parent)
+        self._engine = engine
+        self._url = url
+        self._timeout = timeout
+
+    def run(self) -> None:
+        try:
+            if self._engine == "http":
+                result = scrapling_engine.http_get(self._url, timeout=self._timeout)
+            elif self._engine == "stealth":
+                # 过 Cloudflare 需要更充裕的超时（单位：秒，引擎内部换算成毫秒）
+                result = scrapling_engine.stealth_get(
+                    self._url, timeout=max(self._timeout, 90.0),
+                    solve_cloudflare=True)
+            elif self._engine == "dynamic":
+                result = scrapling_engine.dynamic_get(
+                    self._url, timeout=max(self._timeout, 90.0))
+            else:
+                result = scrapling_engine.FetchResult(
+                    ok=False, url=self._url, engine=self._engine,
+                    error=f"未知抓取引擎：{self._engine}")
+        except Exception as e:                      # pragma: no cover - 兜底
+            result = scrapling_engine.FetchResult(
+                ok=False, url=self._url, engine=self._engine,
+                error=f"{type(e).__name__}: {e}")
+        self.done.emit(result)
 
 
 class Crawler(QObject):
@@ -54,6 +95,7 @@ class Crawler(QObject):
         self._awaiting_load = False
         self._poll_timer = None
         self._skip_detection = False   # 用户判定误判后，本任务内不再因验证暂停
+        self._fetcher = None           # 非浏览器引擎的后台抓取线程（保活引用）
 
         # ---- 组件组装 ----
         self.detector = Detector(self)
@@ -98,12 +140,79 @@ class Crawler(QObject):
             log_warn("[crawler] 任务 URL 为空，任务终止")
             self._finish()
             return
+
+        engine = (getattr(task, "engine", "") or "browser").strip().lower()
+        if engine not in _BROWSER_ENGINES:
+            self._start_engine_fetch(url, engine)
+            return
+
         if self._browser.url() != url:
             log_info(f"[crawler] 导航到 {url}")
             self._browser.navigate(url)
         else:
             # 已在目标页：直接走加载完成流程
             QTimer.singleShot(0, lambda: self._on_load_finished(True))
+
+    # ------------------------------------------------------------------
+    # 非浏览器抓取引擎（Scrapling）
+    # ------------------------------------------------------------------
+    def _start_engine_fetch(self, url: str, engine: str) -> None:
+        """用 Scrapling 取回 HTML，再交给渲染引擎。
+
+        请求阶段由 Scrapling 完成（curl_cffi 的浏览器 TLS 指纹，或 stealth
+        浏览器），因此反检测作用在**请求**上；取回后灌入同一个渲染引擎，
+        从而完整复用既有的检测 / 弹窗 / 提取 / 翻页 / 结果展示。
+        """
+        if not scrapling_engine.available():
+            reason = scrapling_engine.unavailable_reason() or "未安装"
+            msg = (f"引擎「{engine}」需要 Scrapling（{reason}），"
+                   f"已自动回退到浏览器引擎")
+            log_warn(f"[crawler] {msg}")
+            self._signals.log.emit("WARN", msg)
+            if self._browser.url() != url:
+                self._browser.navigate(url)
+            else:
+                QTimer.singleShot(0, lambda: self._on_load_finished(True))
+            return
+
+        try:
+            timeout = float(getattr(self._task, "engine_timeout", 30.0) or 30.0)
+        except (TypeError, ValueError):
+            timeout = 30.0
+
+        self._set_state("NAVIGATING")
+        msg = f"使用「{engine}」引擎抓取：{url}"
+        log_info(f"[crawler] {msg}")
+        self._signals.log.emit("INFO", msg)
+
+        fetcher = _EngineFetcher(engine, url, timeout, self)
+        fetcher.done.connect(self._on_engine_fetched)
+        self._fetcher = fetcher          # 保活：防止线程对象被提前回收
+        fetcher.start()
+
+    def _on_engine_fetched(self, result) -> None:
+        """后台抓取完成（已在主线程）：把 HTML 灌入渲染引擎。"""
+        self._fetcher = None
+        if self._cancel or self._task is None:
+            return
+        if not getattr(result, "ok", False):
+            msg = (f"「{getattr(result, 'engine', '')}」引擎抓取失败："
+                   f"{getattr(result, 'error', '') or '未知错误'}")
+            log_warn(f"[crawler] {msg}")
+            self._signals.log.emit("WARN", msg)
+            self._finish()
+            return
+
+        base = getattr(result, "url", "") or self._task.url
+        msg = (f"「{result.engine}」引擎取回 {result.length} 字节，"
+               f"转入渲染与提取")
+        log_info(f"[crawler] {msg}")
+        self._signals.log.emit("INFO", msg)
+
+        self._awaiting_load = True
+        if not self._browser.load_html(result.html, base):
+            log_warn("[crawler] HTML 载入失败，任务终止")
+            self._finish()
 
     def stop_task(self) -> None:
         if self._state in ("IDLE", "STOPPED"):
@@ -256,6 +365,8 @@ class Crawler(QObject):
             return
         self._set_state("EXTRACTING")
         rows = self.extractor.extract(self._browser.page, self._task) or []
+        if not rows and getattr(self._task, "adaptive", False):
+            rows = self._adaptive_extract()
         added = self._records.add_rows(rows)
         if added > 0:
             self._signals.data_extracted.emit(list(self._records.rows[-added:]))
@@ -269,6 +380,40 @@ class Crawler(QObject):
         if delay_ms > 0 and self._browser.stealth_enabled:
             delay_ms = int(delay_ms * random.uniform(0.7, 1.3))
         QTimer.singleShot(delay_ms, self._after_extract_delay)
+
+    def _adaptive_extract(self) -> list:
+        """常规提取 0 条时，用 Scrapling 自适应选择器再试一次。
+
+        这是「网站改版自愈」的落点：页面结构变化导致原选择器失效时，
+        Scrapling 依据此前保存的元素特征重新定位。
+        仅对结构化记录模式生效（需要容器选择器 + 字段映射）。
+        """
+        task = self._task
+        modes = [m for m in (getattr(task, "modes", None) or [task.mode]) if m]
+        if "records" not in modes or not task.selector or not task.fields:
+            return []
+        if not scrapling_engine.available():
+            return []
+
+        html = self._get_html()
+        if not html:
+            return []
+
+        try:
+            rows = scrapling_engine.extract_records(
+                html, self._browser.url(), task.selector, task.fields,
+                adaptive=True, auto_save=True)
+        except Exception as e:
+            log_warn(f"[crawler] 自适应提取失败：{type(e).__name__}: {e}")
+            return []
+
+        if rows:
+            for r in rows:
+                r.setdefault("_mode", "records")
+            msg = f"自适应选择器找回 {len(rows)} 条（原选择器已失效）"
+            log_info(f"[crawler] {msg}")
+            self._signals.log.emit("INFO", msg)
+        return rows
 
     def _after_extract_delay(self) -> None:
         if self._cancel or self._task is None:

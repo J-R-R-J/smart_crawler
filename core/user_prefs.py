@@ -16,6 +16,7 @@ from PySide6.QtCore import QSettings
 from config.constants import DATA_DIR
 from config.default_settings import (
     DEFAULT_DOWNLOAD_EXTS, DEFAULT_MAX_DOWNLOAD_MB, DEFAULT_STEALTH_ENABLED,
+    DEFAULT_SHOW_CONSOLE,
 )
 
 SETTINGS_PATH = os.path.join(DATA_DIR, "settings.ini")
@@ -114,6 +115,36 @@ class UserPrefs:
     @last_autoscroll.setter
     def last_autoscroll(self, value) -> None:
         self._set("last_autoscroll", bool(value))
+
+    # --------------------------------------------------------------
+    # last_engine: str = "browser"  (browser / http / stealth / dynamic)
+    # --------------------------------------------------------------
+    @property
+    def last_engine(self) -> str:
+        try:
+            v = str(self._settings.value("last_engine", "browser") or "browser")
+        except Exception:
+            return "browser"
+        valid = ("browser", "http", "stealth", "dynamic")
+        return v if v in valid else "browser"
+
+    @last_engine.setter
+    def last_engine(self, value) -> None:
+        self._set("last_engine", str(value or "browser"))
+
+    # --------------------------------------------------------------
+    # last_adaptive: bool = False  自适应选择器（网站改版自愈）
+    # --------------------------------------------------------------
+    @property
+    def last_adaptive(self) -> bool:
+        v = self._settings.value("last_adaptive", False)
+        if isinstance(v, bool):
+            return v
+        return str(v).lower() in ("true", "1", "yes", "on")
+
+    @last_adaptive.setter
+    def last_adaptive(self, value) -> None:
+        self._set("last_adaptive", bool(value))
 
     # --------------------------------------------------------------
     # last_profile: str = "default"
@@ -246,3 +277,17 @@ class UserPrefs:
     @stealth_enabled.setter
     def stealth_enabled(self, value) -> None:
         self._set("stealth_enabled", bool(value))
+
+    # --------------------------------------------------------------
+    # show_console: bool = True  是否显示控制台窗口（正式版默认显示）
+    # --------------------------------------------------------------
+    @property
+    def show_console(self) -> bool:
+        v = self._settings.value("show_console", DEFAULT_SHOW_CONSOLE)
+        if isinstance(v, bool):
+            return v
+        return str(v).lower() in ("true", "1", "yes", "on")
+
+    @show_console.setter
+    def show_console(self, value) -> None:
+        self._set("show_console", bool(value))

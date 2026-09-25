@@ -1,6 +1,6 @@
 # SmartCrawler 智能可视化爬虫
 
-![Version](https://img.shields.io/badge/version-0.0.3-blue)
+![Version](https://img.shields.io/badge/version-0.0.4-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![PySide6](https://img.shields.io/badge/PySide6-6.6%2B-green)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -12,7 +12,7 @@
 
 适用于需要登录态、需要人工过验证、页面结构不规整的中小规模采集场景。
 
-当前版本 **v0.0.3**，更新内容见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **v0.0.4**，更新内容见 [CHANGELOG.md](CHANGELOG.md)。
 
 ![界面截图](docs/screenshot.png)
 
@@ -29,6 +29,8 @@
 - [抓取格式一览](#抓取格式一览)
 - [反爬检测与人机协作](#反爬检测与人机协作)
 - [反爬对抗机制](#反爬对抗机制)
+- [抓取引擎（Scrapling 融合）](#抓取引擎scrapling-融合)
+- [窗口与界面细节](#窗口与界面细节)
 - [弹窗处理策略](#弹窗处理策略)
 - [Profile 与 Cookie 管理](#profile-与-cookie-管理)
 - [结果查看与导出](#结果查看与导出)
@@ -49,11 +51,11 @@
 ### 方式一：下载免安装版（推荐给普通用户）
 
 前往 **[Releases 页面](https://github.com/J-R-R-J/smart_crawler/releases/latest)**，
-在 **Assets** 区域下载 **`SmartCrawler-v0.0.3-win64.zip`**：
+在 **Assets** 区域下载 **`SmartCrawler-v0.0.4-win64.zip`**：
 
 | 项目 | 说明 |
 | --- | --- |
-| 文件名 | `SmartCrawler-v0.0.3-win64.zip` |
+| 文件名 | `SmartCrawler-v0.0.4-win64.zip` |
 | 适用 | Windows 10/11 64 位 |
 | 内容 | 解压即用的程序目录，**自带 Python 运行时与 PySide6**，无需安装任何依赖 |
 | 使用 | 解压到任意目录 → 双击 `SmartCrawler.exe` |
@@ -63,12 +65,12 @@
 
 ### 方式二：下载源码包
 
-在 **Assets** 区域下载 `smart_crawler-v0.0.3.zip`，或使用 GitHub 自动生成的
+在 **Assets** 区域下载 `smart_crawler-v0.0.4.zip`，或使用 GitHub 自动生成的
 **Source code**（`zip` / `tar.gz`）：
 
 | 项目 | 说明 |
 | --- | --- |
-| 文件名 | `smart_crawler-v0.0.3.zip` |
+| 文件名 | `smart_crawler-v0.0.4.zip` |
 | 大小 | 约 180 KB |
 | 内容 | 完整源码（配置 / 核心 / 界面 / 工具 / 测试 / 文档），**不含**虚拟环境与运行时数据 |
 
@@ -90,6 +92,8 @@ cd smart_crawler
 | 能力 | 说明 |
 | --- | --- |
 | 内嵌浏览器 | QtWebEngine（Chromium 内核），渲染结果与手写选择器完全一致 |
+| 抓取引擎可选 | 浏览器 / HTTP 快速模式（不开浏览器）/ 隐身引擎（过 Cloudflare）/ 动态引擎，四者共用同一套检测与提取流程 |
+| 自适应选择器 | 网站改版导致选择器失效时，依据元素特征自动重新定位（需安装 Scrapling） |
 | 反爬识别 | 验证码 / 滑块 / 人机校验 / 访问频控 / 登录墙关键词识别 |
 | 结构化确认 | 命中关键词后再扫描页面是否真有验证组件（输入框 / 第三方 iframe / 组件容器 / 图形码），区分「已确认」与「疑似」，显著降低误判 |
 | 多源检测 | 同时扫描 HTML 源码、页面标题、URL 与**渲染后的可见文本**，并自动忽略零宽字符与空格干扰 |
@@ -119,6 +123,8 @@ cd smart_crawler
 - **Python 3.10 或更高版本**
 - **PySide6 >= 6.6.0**（必须包含 QtWebEngine，即完整版 `PySide6`，不是 `PySide6-Essentials`）
 - 操作系统：Windows / Linux / macOS
+- 可选：[Scrapling](#抓取引擎scrapling-融合) —— 不装也能用，装上后解锁
+  HTTP 快速模式、隐身引擎、动态引擎与自适应选择器
 
 ---
 
@@ -267,17 +273,33 @@ python main.py --selftest
 `--selftest` 的输出示例：
 
 ```
-SmartCrawler selftest  version=0.0.3
+SmartCrawler selftest  version=0.0.4
 frozen=False  base_dir=J:\...\smart_crawler
 data_dir=J:\...\smart_crawler\crawler_data
 PySide6 6.9.3  QtWebEngine/QtWebChannel/QtPrintSupport OK
-modules: 30 ok, 0 failed
+scrapling: 0.4.15 已就绪（HTTP 快速模式 / 隐身引擎 / 动态引擎 / 自适应选择器可用）
+window_icon: J:\...\smart_crawler\packaging\appicon.ico
+console: 有控制台窗口（可显示/隐藏）  visible=True
+modules: 33 ok, 0 failed
 SELFTEST RESULT: OK
 ```
 
-> 免安装版（无控制台窗口）运行 `--selftest` 时看不到控制台输出，
-> 结果会同时写入 `crawler_data\logs\`，用记事本打开即可查看。
+> `scrapling:` 那一行显示 Scrapling 融合层的可用性。
+> 免安装版**有意不包含** Scrapling，因此会显示「不可用」——这属于正常现象，
+> 不是错误：非浏览器引擎会自动回退为浏览器引擎，其余功能不受影响。
+> 想让免安装版也能用非浏览器引擎，见
+> [抓取引擎（Scrapling 融合）](#抓取引擎scrapling-融合) 里的「外挂依赖目录」。
+>
+> `window_icon:` 与 `console:` 两行是界面外壳状态：图标实际取自哪个文件
+> （找不到会写「未找到图标文件，将用内置绘制图标」），以及当前进程有没有
+> 控制台窗口。打包后「左上角没有图标」「控制台哪去了」这类问题看这两行即可。
+
+> 正式版 exe **默认保留控制台**，`--selftest` 的输出可以直接看到；
 > 退出码 `0` 表示自检通过。
+> 控制台窗口可以在界面「④ 执行 → 显示控制台窗口」里随时隐藏 / 显示
+> （隐藏不中断输出，日志照常写入 `crawler_data\logs\`）。
+> 只有在打包时显式设置 `SC_CONSOLE=0` 才会生成无控制台的版本，
+> 那种版本的自检结果请查看日志文件。
 
 ---
 
@@ -474,6 +496,195 @@ WebGL 相关项会显示 `no-webgl`（没有 GPU 上下文），属环境限制�
 
 ---
 
+## 抓取引擎（Scrapling 融合）
+
+左侧配置面板的「② 抓取引擎（反检测）」决定**页面 HTML 从哪里来**：
+
+| 引擎 | 请求方式 | 适用场景 |
+| --- | --- | --- |
+| 浏览器引擎 | QtWebEngine 自行请求并渲染 | 默认；兼容依赖 JS 渲染的站点 |
+| HTTP 快速模式 | `curl_cffi` 伪装浏览器 TLS 指纹，**不启动浏览器** | 静态页面，速度提升一个数量级 |
+| 隐身引擎 | Scrapling `StealthyFetcher` | 站点有 Cloudflare Turnstile 等验证 |
+| 动态引擎 | Scrapling `DynamicFetcher`（Playwright） | JS 渲染重、且需要真实浏览器行为 |
+
+四种引擎**共用同一套后续流程** —— 反爬检测、弹窗处理、提取、翻页、结果展示完全一致。
+区别只在请求阶段：非浏览器引擎由 Scrapling 取回 HTML，再灌入同一个渲染引擎，
+因此反检测作用在**请求**上，而解析与展示无需任何改动即可复用。
+
+### 安装（可选）
+
+Scrapling 是**可选依赖**。不安装时程序完全正常，只是选择非浏览器引擎时
+会在抓取阶段提示原因并自动回退为浏览器引擎。
+
+```bash
+# 本项目的 venv 以 --without-pip 创建，用系统 pip 指定目标解释器。
+# ⚠️ --python 必须放在 install 之前，否则 pip 会报
+#    "The --python option must be placed before the pip subcommand name"
+python -m pip --python "<项目>\.venv\Scripts\python.exe" install "scrapling[all]"
+
+# 仅「隐身引擎 / 动态引擎」需要：下载 stealth 浏览器（数百 MB）
+<项目>\.venv\Scripts\scrapling.exe install
+```
+
+> HTTP 快速模式与自适应选择器**不需要**执行 `scrapling install`。
+>
+> 浏览器默认下载到用户目录，若被安全软件拦截（`EPERM: operation not permitted`），
+> 可先设置环境变量把目标改到非系统盘，并把该目录加入杀软白名单：
+>
+> ```powershell
+> [Environment]::SetEnvironmentVariable("PLAYWRIGHT_BROWSERS_PATH", "D:\ms-playwright", "User")
+> ```
+
+### 免安装版如何使用（外挂依赖目录）
+
+免安装的 `SmartCrawler.exe` **有意不打包** Scrapling：`playwright` / `camoufox`
+的 wheel 合计数百 MB，运行时还要另外下载浏览器，与「解压即用」的定位冲突。
+但这意味着**装在 `.venv` 里的 Scrapling 对 exe 无效** —— exe 的 `sys.path`
+指向包内部，不看你项目里的虚拟环境。
+
+为此程序会把下面这个目录追加到 `sys.path`（在 exe 同级）：
+
+```
+<解压目录>\SmartCrawler\crawler_data\site-packages\
+```
+
+用一条命令把 Scrapling 装进去，即可让免安装版也用上非浏览器引擎：
+
+```powershell
+# 必须是 Python 3.13（与打包用的解释器同版本），否则 curl_cffi / greenlet
+# 这类带 C 扩展的包无法导入
+python -m pip install --target "<解压目录>\SmartCrawler\crawler_data\site-packages" "scrapling[all]"
+
+# 仅「隐身引擎 / 动态引擎」需要下载浏览器（数百 MB）
+$env:PLAYWRIGHT_BROWSERS_PATH = "<解压目录>\SmartCrawler\crawler_data\site-packages\ms-playwright"
+python -m scrapling install
+```
+
+装完后重新启动程序，「② 抓取引擎」下方的提示会从「未检测到 Scrapling」
+变为「Scrapling 已就绪，四种引擎均可用」。也可以直接看自检：
+
+```powershell
+.\SmartCrawler.exe --selftest
+# scrapling: 0.4.15 已就绪（HTTP 快速模式 / 隐身引擎 / 动态引擎 / 自适应选择器可用）
+```
+
+> `PLAYWRIGHT_BROWSERS_PATH` 若已在系统里设过，程序**不会覆盖**它；
+> 只有未设置时才会去找 `site-packages\ms-playwright` 与 `ms-playwright`。
+>
+> 这个目录不存在时没有任何副作用，程序只是照常回退为浏览器引擎。
+
+### 自适应选择器（网站改版自愈）
+
+勾选「启用自适应选择器」后，当常规选择器提取不到数据时，程序会用 Scrapling
+依据此前保存的元素特征重新定位元素。仅对**结构化记录**格式生效。
+
+```
+首次：.old-card + auto_save   → 命中 2 条，特征写入 crawler_data/scrapling_adaptive.db
+改版：容器 class 整体改为 .brand-new-card
+      直接查 .old-card        → 0 条        ← 原选择器失效
+      开启自适应              → 2 条        ← 自动找回
+```
+
+### 高级选择器语法
+
+字段映射的子选择器除常规 CSS 外，还支持 Scrapling 的扩展写法：
+
+| 写法 | 含义 | 示例 |
+| --- | --- | --- |
+| `::text` | 取文本节点 | `h2::text` |
+| `::attr(name)` | 取属性 | `a::attr(href)` |
+| XPath | 完整 XPath 表达式 | `//div[@id='main']//a` |
+
+原有的 `text / href / src / html / attr` 五种字段类型保持不变，可与上述写法混用。
+
+### 说明
+
+- 实测基于 **scrapling 0.4.15**（Python 3.13）。
+- 该版本入口类为 `Selector`，旧文档里的 `Adaptor` 已改名；
+  `auto_save` 必须配合 `Selector(..., adaptive=True)` 才生效。
+- 打包发布时建议**不包含** Scrapling：playwright / camoufox 会使产物增大数百 MB，
+  而未安装时的降级路径已有测试覆盖。
+
+---
+
+## 窗口与界面细节
+
+这几件事都属于「源码运行看着正常、打包后才暴露」的类型，因此单独说明。
+
+### 窗口图标
+
+Windows 上有**两条互不相干**的图标路径，很容易混为一谈：
+
+| 你看到的位置 | 由谁决定 |
+| --- | --- |
+| 资源管理器 / 任务栏里那个 `.exe` 文件的图标 | 打包时 spec 的 `icon=appicon.ico` 写进 PE 资源 |
+| **窗口左上角、Alt+Tab、任务栏按钮上的图标** | 程序主动调用 `QApplication.setWindowIcon()` |
+
+关键点：**Qt 不会自动继承 exe 资源里的图标**。不调用 `setWindowIcon()`，
+窗口左上角就是空白 —— 这正是「界面左上角没有图标」的原因，与图标文件本身无关。
+
+程序的实际取图顺序（见 `utils/appicon.py`）：
+
+1. `_internal\appicon.ico`（打包时随 `datas` 分发）
+2. 源码根目录 / `assets\` / `packaging\` 下的 `appicon.ico` 或 `.png`
+3. exe 同级目录下的 `appicon.ico`
+4. 都没有 → 用 QPainter **现画**一个（矢量图形，不依赖字体）
+
+> 图标文件只有一张 256×256 时，标题栏要的 16×16 只能由系统缩放，会糊。
+> 所以 `packaging\appicon.ico` 里准备了 **16 / 32 / 48 / 64 / 256 五个原生尺寸**
+> （24 与 128 由 Windows 就近取用，都是**缩小**，不会放大糊掉）。
+> 重新生成用 `packaging\make_icon.py`，它会识别形如 `xxx16x16.ico`
+> 的按尺寸导出文件并原样取用对应的帧。
+
+### 控制台窗口
+
+正式版 exe 采用 **console 子系统**打包，`console=True` 是默认值：
+
+- 启动期崩溃、Qt/Chromium 的 WARNING、`--selftest` 的输出都还能看到；
+  GUI 子系统的版本在出错时是「双击没反应，什么都没有」，几乎无法排查。
+- 需要在界面「**④ 执行 → 显示控制台窗口**」里随时隐藏 / 显示，无需重新打包。
+  隐藏只是 `ShowWindow(SW_HIDE)`，**进程与 stdout 都还在**，
+  日志照常写入 `crawler_data\logs\`，随时可以再勾回来。
+- 该勾选框在「进程本来就没有控制台」时会自动置灰
+  （例如用 `pythonw.exe` 启动源码）。
+- 只有打包时显式设置 `SC_CONSOLE=0` 才会生成无控制台的版本：
+
+  ```powershell
+  $env:SC_CONSOLE = "0"   # 去掉控制台（排查完再打包发布时可用）
+  .venv\Scripts\python.exe -m PyInstaller packaging\SmartCrawler.spec --noconfirm --clean
+  ```
+
+### 新窗口 / 新标签请求
+
+`QWebEnginePage.createWindow()` 的**默认实现返回 `nullptr`**，于是
+`<a target="_blank">` 与 `window.open()` 发出的请求会被**静默丢弃**：
+点下去没有任何反应，控制台也不报错，看起来就像「按钮坏了」。
+这是 QtWebEngine 的既定行为，与具体站点无关。
+
+本项目界面只有一块渲染视图，因此 `core/browser.py` 的 `CrawlerPage` 把新窗口
+请求**接回当前视图**（单视图爬虫的直觉行为：点了就能看到目标页，可继续拾取 /
+抓取），同时在日志里记一行：
+
+```
+[INFO] 站点请求新窗口，已在当前视图打开：https://...
+```
+
+下载不受影响：下载走 `QWebEngineProfile.downloadRequested`，
+与 `createWindow` 是两条完全独立的路径。
+
+### 样式表必须随包分发
+
+PyInstaller **不会自动收集** `.qss` / `.ico` 这类非 `.py` 文件，必须在 spec 的
+`datas` 里显式声明。漏掉 `ui/styles.qss` 的后果是「打包版一点样式都没有」——
+而代码里只有一条 WARNING，界面照样显示，所以这个错误极容易长期不被发现。
+
+`ui/main_window.py` 的 `qss_candidates()` 会依次尝试源码路径、`_MEIPASS`、
+exe 同级与 `_internal\ui\`，并且**加载失败会打印全部候选路径**，
+不会再出现「只知道失败、不知道去哪找」的情况。
+`tests/test_packaging.py` 直接执行 spec 来断言 `datas` 里确实有它。
+
+---
+
 ## 弹窗处理策略
 
 很多站点会在加载后弹出遮罩层、公告框、订阅提示。程序在每页加载后自动扫描并处理，
@@ -629,6 +840,7 @@ smart_crawler/
 │   ├── picker.py               元素拾取（JS 注入 + 桥接回传）
 │   ├── pager.py                翻页检测与点击
 │   ├── popup_handler.py        弹窗扫描与三策略处理
+│   ├── scrapling_engine.py     Scrapling 融合层（可选依赖 / 惰性导入 / 自动降级）
 │   └── crawler.py              抓取状态机总调度
 │
 ├── models/                     数据模型
@@ -637,7 +849,7 @@ smart_crawler/
 │   └── record.py               结果清洗、去重、列合并
 │
 ├── ui/                         界面层
-│   ├── styles.qss              深色主题样式表
+│   ├── styles.qss              深色主题样式表（**必须随包分发**，见打包说明）
 │   ├── main_window.py          主窗口，组装与信号绑定
 │   ├── top_bar.py              地址栏、导航、拾取、弹窗策略
 │   ├── banner.py               人类验证提示横幅
@@ -651,7 +863,9 @@ smart_crawler/
 │   ├── logger.py               日志落盘（按天 + 5MB 轮转）
 │   ├── exporters.py            CSV / JSON / Cookie 导出导入
 │   ├── maintenance.py          临时文件统计与清理
-│   └── js_runner.py            runJavaScript 封装（限流 + 同步等待）
+│   ├── js_runner.py            runJavaScript 封装（限流 + 同步等待）
+│   ├── appicon.py              窗口图标（优先用 ico 文件，缺失时矢量现画）
+│   └── console.py              控制台窗口显示 / 隐藏（Win32 ShowWindow）
 │
 ├── docs/
 │   └── screenshot.png          界面截图
@@ -665,10 +879,14 @@ smart_crawler/
 │   ├── test_e2e.py             端到端抓取测试
 │   ├── test_feature.py         功能覆盖测试（含结构化确认 / 检测增强 / 关键词 / 清理）
 │   ├── test_ui.py              界面交互测试
+│   ├── test_scrapling.py       Scrapling 融合测试（含降级路径）
+│   ├── test_shell.py           界面外壳测试（图标 / 控制台 / 样式表 / 新窗口）
+│   ├── test_packaging.py       打包属性与版本一致性（依赖 packaging/，缺则跳过）
 │   └── testdata/               测试用本地页面
 │       ├── page1.html
 │       ├── page2.html
 │       ├── rich.html
+│       ├── newwindow.html      target="_blank" 与 window.open 场景
 │       ├── captcha.html        只有关键词、无验证组件（疑似场景）
 │       ├── captcha_form.html   真实验证码表单（确认场景）
 │       └── login_form.html     登录表单（登录墙确认）
@@ -680,6 +898,7 @@ smart_crawler/
     ├── cookies/                Cookie 备份
     ├── downloads/              网页下载的文件
     ├── engine/                 浏览器引擎存储与缓存
+    ├── site-packages/          外挂依赖目录（可选，装 Scrapling 到这里）
     ├── keywords.json           自定义检测关键词
     └── settings.ini            用户偏好（INI 文本）
 ```
@@ -840,7 +1059,7 @@ POPUP_CLOSE_SELECTORS.append(".my-site-close-btn")
 
 ## 测试
 
-项目自带四套无头测试，覆盖从模块导入、真实页面抓取到界面交互的完整链路。
+项目自带七套无头测试，覆盖从模块导入、真实页面抓取到界面交互的完整链路。
 
 在项目根目录执行：
 
@@ -856,6 +1075,12 @@ POPUP_CLOSE_SELECTORS.append(".my-site-close-btn")
 
 # 界面交互测试：导航、多格式复选、滚动面板、窗口尺寸、停止复位、跳过按钮、各面板操作（64 项）
 .venv\Scripts\python.exe tests\test_ui.py
+
+# Scrapling 融合测试：解析、自适应自愈、降级路径、接入层、外挂目录（99 项）
+.venv\Scripts\python.exe tests\test_scrapling.py
+
+# 界面外壳测试：窗口图标、控制台开关、样式表路径、新窗口请求（35 项）
+.venv\Scripts\python.exe tests\test_shell.py
 ```
 
 Linux / macOS 使用 `python tests/test_smoke.py` 等形式即可。
@@ -863,16 +1088,38 @@ Linux / macOS 使用 `python tests/test_smoke.py` 等形式即可。
 测试结果（本机 Python 3.13 + PySide6 6.9.3）：
 
 ```
-test_smoke.py    : 46 passed, 0 failed
-test_e2e.py      :  9 passed, 0 failed
-test_feature.py  : 64 passed, 0 failed
-test_ui.py       : 64 passed, 0 failed
-合计             : 183 passed, 0 failed
+test_smoke.py     : 46 passed, 0 failed
+test_e2e.py       :  9 passed, 0 failed
+test_feature.py   : 64 passed, 0 failed
+test_ui.py        : 64 passed, 0 failed
+test_scrapling.py : 99 passed, 0 failed
+test_shell.py     : 35 passed, 0 failed
+合计              : 317 passed, 0 failed
 ```
 
-此外 `tests/test_packaging.py` 校验打包属性与版本号的一致性（18 项）：
+> `test_scrapling.py` 中唯一联网的用例失败时会记为 **SKIP** 而非 FAIL，
+> 因此离线环境不会把它跑红；未安装 Scrapling 时，解析类用例自动跳过，
+> 但**降级路径**用例始终执行。
+>
+> 它还包含两条**防静默故障**的守卫，都是实际踩过之后补的：
+> 「模块顶层不得有重名函数」（重名会被后一个静默覆盖，Python 不报错也不警告）
+> 与「外挂依赖目录里的模块必须真的能被 import」（只把目录加进 `sys.path`
+> 和路径真的生效是两回事 —— 测试会往目录里放一个临时模块来验证）。
+
+> `test_shell.py` 针对的是「只有打包后才暴露、源码运行看不出来」的四类问题：
+> 窗口图标、控制台开关、样式表路径、新窗口请求。其中新窗口请求用**真实
+> WebEngine 导航**验证（点 `target="_blank"` 链接后断言 URL 真的变了），
+> 而不是只检查方法存在。
+>
+> 该套件**不依赖 `loadFinished` 判定就绪**：offscreen + `--single-process`
+> 下 Chromium 渲染进程首次启动要 5~11 秒，单等一个信号配固定超时会非常脆，
+> 因此改为轮询可观测状态（DOM 元素是否存在 / URL 是否已变）。
+
+此外 `tests/test_packaging.py` 校验打包属性与版本号的一致性（23 项）：
 该文件依赖本机维护的 `packaging/` 目录，目录不存在时会**自动跳过**，
-因此在 CI 或协作者机器上不会误报失败。
+因此在 CI 或协作者机器上不会误报失败。它会**执行 spec 本身**，
+因此「声明了 `DATAS` 却忘了传给 `Analysis`」「数据文件被 `_drop_data`
+误筛掉」这类错误也会被抓出来。
 
 ```bash
 .venv\Scripts\python.exe tests\test_packaging.py
@@ -1072,12 +1319,22 @@ set SMARTCRAWLER_UA_SUFFIX=MyBot/1.0
 
 ## 版本与更新日志
 
-当前版本：**v0.0.3**（2026-09-20）
+当前版本：**v0.0.4**（2026-09-25）
 
 版本号只有一个源头：`config/constants.py` 的 `APP_VERSION`，窗口标题、启动日志、
 打包属性文件都由它派生。
 
 完整变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+
+### v0.0.4
+
+- 新增**抓取引擎可选**：浏览器 / HTTP 快速模式（不开浏览器）/ 隐身引擎（过 Cloudflare）/
+  动态引擎，四者共用同一套检测与提取流程
+- 引入 **Scrapling 融合层**（可选依赖，未安装时自动降级为浏览器引擎）
+- 新增**自适应选择器**：网站改版导致选择器失效时，依据元素特征自动重新定位
+- 字段选择器支持 `::text` / `::attr()` / XPath 等高级语法
+- 修复浏览器引擎超时单位错误（Scrapling 浏览器引擎用毫秒、HTTP 引擎用秒，
+  原先把 60 秒传成了 60 毫秒，导致必然导航超时）
 
 ### v0.0.3
 
