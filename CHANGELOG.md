@@ -346,6 +346,34 @@
   `RENDER_DATA`（含 `.image?biz_tag=aweme_images` 与 `.mp3`），
   `test_feature` 相应增加 9 项断言（含「编码段里的音频要认出来」这条本轮 bug 的回归）。
 
+### 打包与分发：源码包白名单收紧 + clean.bat 重写（补记）
+
+- **源码包只允许包含这 15 个顶层条目**（用户指定，改由脚本强制）：
+  `assets/ config/ core/ models/ tests/ tools/ ui/ utils/` 八个目录 +
+  `clean.bat LICENSE main.py requirements.txt run.bat run.sh 浏览器增强包安装指南.md`。
+  也就是说 **README.md / CHANGELOG.md / .gitignore 不再进源码包** ——
+  它们在仓库里照常存在（GitHub 页面与 Release 文稿都靠它们），只是不再随包分发。
+  白名单写在 `packaging/make_source_zip.py` 的 `ALLOW_TOP_DIRS` /
+  `ALLOW_TOP_FILES`，且是**闭合**的：打包时打印「白名单之外的条目」，
+  非空直接判 FAIL，避免以后又"长"出别的东西。源码包 74 → 71 条目、
+  351,271 B → 296,108 B（约 289 KB）。
+- **`clean.bat` 重写**：默认 6 步 —— ① `__pycache__`（**跳过 `.venv` / `.git`**，
+  以前遍历虚拟环境既慢又没意义）② 临时目录 ③ `.pyc` / `.pyo`（只扫项目自己的目录）
+  ④ 日志与临时件（根 `*.log`、`*.part`、`build\_*.log`、`build\_tmp*`、`release\*.tmp`）
+  ⑤ 构建中间产物（`dist\`、`build\SmartCrawler\`）⑥ 可选。
+  `clean.bat -a` 才追加清理运行时数据（logs / exports / cookies / 自适应特征库）
+  **以及 `release\*.zip`**（先弹一次 Y/N 确认，因为它删的是要上传的成品）。
+  `build\_verify_release.py` 与默认模式下的 release 附件都不受影响；
+  删不掉时会打印 `[SKIPPED]` 并说明要先关掉程序 / 停掉 PyInstaller。
+- **《浏览器增强包说明.txt》换成用户 2026-09-26 修改版**（真值来源仍是
+  `packaging/browser_note.txt`，免安装版主包与浏览器增强包都引用它）：
+  路线 1 补上国内镜像地址
+  `https://registry.npmmirror.com/binary.html?path=playwright/builds/cft/153.0.8010.12/`，
+  并把联网下载标为「极不推荐」。
+- 校验脚本 `build/_verify_release.py` 增加两条断言：源码包顶层条目恰好等于
+  白名单、源码包里不含 `README.md` / `CHANGELOG.md` / `.gitignore`
+  （校验项 37 → 39）。
+
 ---
 
 ## [0.0.3] - 2026-09-20

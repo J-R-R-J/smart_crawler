@@ -87,8 +87,9 @@
 | 项目 | 说明 |
 | --- | --- |
 | 文件名 | `smart_crawler-v0.0.4.zip` |
-| 大小 | 约 343 KB |
-| 内容 | 完整源码（配置 / 核心 / 界面 / 工具 / 测试 / 文档），**不含**虚拟环境与运行时数据 |
+| 大小 | 约 289 KB |
+| 内容 | 完整源码：配置 / 核心 / 界面 / 模型 / 工具 / 测试 + `main.py`、`requirements.txt`、`run.bat` / `run.sh` / `clean.bat`、`LICENSE`、`assets\`、《浏览器增强包安装指南.md》。**不含**虚拟环境、运行时数据与打包产物 |
+| 不含 | `README.md` / `CHANGELOG.md` / `.gitignore` / `docs\` / `.github\` / `packaging\` —— 这些只在仓库里，需要请看仓库页面 |
 
 解压后按「[安装](#安装)」章节装依赖，再运行 `python main.py`。
 
