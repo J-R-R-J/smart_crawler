@@ -24,6 +24,9 @@ class Extractor(QObject):
         "list": "text",
         "links": "text",
         "images": "src",
+        "video": "src",
+        "audio": "src",
+        "media": "src",
         "text": "text",
         "html": "html",
         "regex": "match",
@@ -32,6 +35,8 @@ class Extractor(QObject):
     def __init__(self, js, parent=None):
         super().__init__(parent)
         self._js = js
+        #: 上一次过滤掉的站点素材图数量（0 表示没过滤或没命中）
+        self.last_filtered = 0
 
     def extract(self, page, task) -> list:
         """按 task.modes 依次执行提取，返回合并后的 list[dict]。
@@ -54,6 +59,8 @@ class Extractor(QObject):
                     continue
                 data = self._parse(raw)
                 rows = self._normalize(mode, data)
+                rows = self._filter_assets(
+                    rows, bool(getattr(task, "filter_site_assets", False)))
                 all_rows.extend(rows)
                 log_info(f"[extract] {mode}：{len(rows)} 条")
             except Exception as e:
@@ -62,6 +69,30 @@ class Extractor(QObject):
         if all_rows:
             self.extracted.emit(all_rows)
         return all_rows
+
+    def _filter_assets(self, rows: list, enabled: bool = False) -> list:
+        """按开关丢弃站点自己的 UI 素材图（图标 / 表情 / 头像 / 皮肤资源）。
+
+        为什么要做：抓媒体时**绝大多数行都是站点 UI 图**（实测某视频站一页
+        181 条里大部分是图标与表情），真正的正文图被淹没，用户会以为
+        「只能抓到站点的素材图」。JS 侧已给每条打上 ``asset=1``，
+        这里只在用户勾选时丢弃，并明确写一条日志说明丢了多少 ——
+        静默丢数据比留着更糟。
+        """
+        self.last_filtered = 0
+        if not rows or not enabled:
+            return rows
+        keep, dropped = [], 0
+        for r in rows:
+            if isinstance(r, dict) and r.get("asset"):
+                dropped += 1
+                continue
+            keep.append(r)
+        if dropped:
+            self.last_filtered = dropped
+            log_info(f"[extract] 已过滤 {dropped} 条站点素材图"
+                     f"（图标/表情/头像/UI 资源），保留 {len(keep)} 条")
+        return keep
 
     @staticmethod
     def _parse(raw):
@@ -119,5 +150,5 @@ class Extractor(QObject):
                 return str(v)
 
     def supported_modes(self) -> list:
-        """SUPPORTED_FORMATS 的 18 个 key。"""
+        """SUPPORTED_FORMATS 的 20 个 key。"""
         return [key for key, _label, _hint in SUPPORTED_FORMATS]

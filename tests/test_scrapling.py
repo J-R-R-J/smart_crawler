@@ -10,6 +10,7 @@
 用法（在项目根目录执行）：
     .venv\\Scripts\\python.exe tests\\test_scrapling.py
 """
+import logging
 import os
 import re
 import sys
@@ -545,6 +546,311 @@ def test_version_and_browsers(se):
             pass
 
 
+def test_custom_paths(se):
+    """外挂包目录 / 浏览器目录可以被用户自定义（界面上的「④ 引擎文件位置」）。
+
+    为什么必须有：包 + 浏览器合计数百 MB，用户完全可能装在别的盘；
+    而 playwright 联网下载默认落在 %LOCALAPPDATA%\\ms-playwright ——
+    与其让他搬几百 MB 的文件，不如让程序指过去。这里守住四条：
+      1. 设了就生效（目录 / 提示文案 / 落点全都跟着变）；
+      2. 恢复默认后一切回到原样，且**旧的 sys.path 条目要撤掉**
+         （否则换目录后仍从旧目录导入 —— 这类问题最难查）；
+      3. 用户设的环境变量优先级最高（既有不变式，不能因为加了自定义就破坏）；
+      4. 浏览器版本表能读到真实依赖的 browsers.json（决定镜像地址与目录名）。
+    """
+    import shutil
+    import tempfile
+
+    saved_path = list(sys.path)
+    saved_custom = se.custom_paths()
+    saved_env = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+    d = os.path.join(tempfile.gettempdir(), "_sc_custom_paths")
+    try:
+        os.makedirs(d, exist_ok=True)
+        # ---- 1. 设置 ----
+        out = se.set_custom_paths(site_packages=d, browsers=d)
+        check("set_custom_paths() 回显设置后的快照",
+              out.get("site_packages") == d and out.get("browsers") == d, str(out))
+        check("site_packages_dir() 用上了自定义目录",
+              se.site_packages_dir() == d, se.site_packages_dir())
+        check("自定义目录被真的加进 sys.path（不只是记下来）",
+              d in sys.path, str([p for p in sys.path if p == d]))
+        check("site_packages_hint() 里的路径跟着变",
+              d in se.site_packages_hint(), se.site_packages_hint())
+        check("浏览器落点跟着自定义目录走",
+              se.browser_target_dir() == d, se.browser_target_dir())
+        check("浏览器目录来源标记为 custom",
+              se.browsers_dir_source() == "custom", se.browsers_dir_source())
+        check("browser_drop_dirs() 仍是两个默认落点（不含自定义）",
+              len(se.browser_drop_dirs()) == 2
+              and se.browser_drop_dirs()[1] != d, str(se.browser_drop_dirs()))
+
+        # ---- 2. 环境变量仍然优先 ----
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = r"X:\env-wins"
+        se.set_custom_paths(browsers=d)          # 重新准备一次
+        check("用户设的环境变量优先于界面自定义",
+              se.browsers_dir() == r"X:\env-wins"
+              and se.browsers_dir_source() == "env",
+              f"{se.browsers_dir()} / {se.browsers_dir_source()}")
+        os.environ.pop("PLAYWRIGHT_BROWSERS_PATH", None)
+
+        # ---- 3. 恢复默认 ----
+        se.set_custom_paths(site_packages="", browsers="")
+        check("恢复默认后目录回到内置值",
+              se.site_packages_dir() == se.SITE_PACKAGES_DIR,
+              se.site_packages_dir())
+        check("恢复默认后旧目录已从 sys.path 撤掉",
+              d not in sys.path, str([p for p in sys.path if p == d]))
+        check("恢复默认后的来源不再是 custom",
+              se.browsers_dir_source() != "custom", se.browsers_dir_source())
+
+        # ---- 4. 版本表（镜像地址与目录名都靠它）----
+        reg = se.browser_registry()
+        check("browser_registry() 给出 chromium 的 revision 与版本号",
+              reg["chromium_rev"].isdigit() and reg["chromium_version"].count(".") >= 2,
+              str(reg))
+        check("版本表优先读真实依赖的 browsers.json（不是只写死常量）",
+              reg["source"] != "" and ("browsers.json" in reg["source"]
+                                       or "常量" in reg["source"]),
+              reg["source"])
+        tree = se.browser_tree_text()
+        check("目录树里带上了真实 revision 与两个必需 exe",
+              f"chromium-{reg['chromium_rev']}" in tree
+              and "chrome.exe" in tree and "chrome-headless-shell.exe" in tree,
+              tree.splitlines()[1] if len(tree.splitlines()) > 1 else tree)
+        check("目录树标明 winldd（依赖校验要用）",
+              f"winldd-{reg['winldd_rev']}" in tree, tree)
+
+        # ---- 5. 镜像指引（路线 3）----
+        mirror = se.mirror_hint()
+        check("镜像指引用的是真实版本号拼出来的地址",
+              reg["chromium_version"] in mirror
+              and "registry.npmmirror.com/binary.html?path=playwright/builds/cft/"
+              in mirror, mirror.splitlines()[2] if len(mirror.splitlines()) > 2 else mirror)
+        check("镜像指引给出两个必需的 zip 名",
+              "chrome-win64.zip" in mirror
+              and "chrome-headless-shell-win64.zip" in mirror)
+        check("镜像指引要求建两个标记文件（否则会被当成没装）",
+              "INSTALLATION_COMPLETE" in mirror
+              and "DEPENDENCIES_VALIDATED" in mirror)
+        check("镜像指引提醒 winldd（30 天后依赖校验要用）",
+              "winldd" in mirror and "PrintDeps.exe" in mirror)
+
+        dry = se.dry_run_hint()
+        check("dry-run 指引含查看命令与默认落点",
+              "playwright install --dry-run" in dry
+              and se.default_download_dir() in dry, dry.splitlines()[1])
+        check("默认落点是 %LOCALAPPDATA%\\ms-playwright",
+              se.default_download_dir().replace("\\", "/").endswith("/ms-playwright")
+              and "AppData" in se.default_download_dir(),
+              se.default_download_dir())
+    finally:
+        se.set_custom_paths(site_packages=saved_custom.get("site_packages", ""),
+                            browsers=saved_custom.get("browsers", ""))
+        sys.path[:] = saved_path
+        if saved_env is None:
+            os.environ.pop("PLAYWRIGHT_BROWSERS_PATH", None)
+        else:
+            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = saved_env
+        try:
+            shutil.rmtree(d)
+        except OSError:
+            pass
+
+
+def test_engine_setup_ui(se):
+    """「装依赖 / 装浏览器」的界面指引：复制按钮、设置对话框、用户指南。
+
+    这几处是**同一个契约的四个副本**：左侧提示、复制按钮复制的文本、
+    设置对话框里的说明、以及随包分发的《浏览器增强包安装指南》。
+    它们讲的必须是同一套路径与命令 —— 以前出过「文档里的路径和代码里的
+    不一致」，所以这里把关键字都断言一遍，任一处漂移就会红。
+    """
+    from PySide6.QtGui import QGuiApplication
+    from PySide6.QtWidgets import (
+        QApplication, QGroupBox, QLabel, QPlainTextEdit,
+    )
+
+    QApplication.instance() or QApplication(sys.argv)
+
+    from core.user_prefs import UserPrefs
+    from ui.left_panel import LeftPanel
+    from ui.settings_dialog import SettingsDialog
+    from ui.top_bar import TopBar
+
+    # ---- 左侧「复制安装命令」 ----
+    lp = LeftPanel(UserPrefs())
+    check("左面板有「复制安装命令」按钮",
+          lp.copy_hint_btn is not None and lp.copy_hint_btn.text() != "")
+    check("复制按钮文案属于三种预期状态之一",
+          lp.copy_hint_btn.text() in ("复制安装命令", "无需安装", "已复制"),
+          lp.copy_hint_btn.text())
+    check("复制内容随三态决定（有 payload 或明确为空）",
+          isinstance(lp._copy_payload, str))
+    got = lp.copy_engine_command()
+    if lp._copy_payload:
+        check("点复制后剪贴板拿到同一段命令",
+              got is True
+              and QGuiApplication.clipboard().text() == lp._copy_payload,
+              QGuiApplication.clipboard().text()[:60])
+        check("复制后按钮给出反馈",
+              lp.copy_hint_btn.text() == "已复制", lp.copy_hint_btn.text())
+    else:
+        check("无需安装时点复制不做任何事", got is False)
+    lp.deleteLater()
+
+    # ---- 左上角「设置」按钮 ----
+    tb = TopBar()
+    check("顶栏有「设置」按钮", tb.btn_settings is not None)
+    check("设置按钮在整条顶栏的最左边（左上角）",
+          tb.layout().indexOf(tb.btn_settings) == 0,
+          str(tb.layout().indexOf(tb.btn_settings)))
+    fired = []
+    tb.settings_clicked.connect(lambda: fired.append(1))
+    tb.btn_settings.click()
+    check("点设置会发 settings_clicked", bool(fired))
+    tb.deleteLater()
+
+    # ---- 设置对话框 ----
+    dlg = SettingsDialog()
+    check("设置对话框标题含「设置」", "设置" in dlg.windowTitle(),
+          dlg.windowTitle())
+    titles = [g.title() for g in dlg.findChildren(QGroupBox)]
+    check("对话框同时给出两条安装路线",
+          any("路线 1" in t for t in titles) and any("路线 2" in t for t in titles),
+          str(titles))
+    text = "\n".join(w.text() for w in dlg.findChildren(QLabel))
+    text += "\n" + "\n".join(b.toPlainText() for b in dlg.findChildren(QPlainTextEdit))
+    text += "\n" + "\n".join(titles)
+    for key in ("chromium-1243", "chrome-headless-shell.exe",
+                "判据", "PYTHONPATH", "注意事项", "INSTALLATION_COMPLETE",
+                "153.0.8010.12", "npmmirror"):
+        check(f"对话框写明 {key}", key in text)
+    check("对话框给出三条安装路线（含国内镜像）",
+          any("路线 1" in t for t in titles) and any("路线 2" in t for t in titles)
+          and any("路线 3" in t for t in titles), str(titles))
+    check("对话框有「引擎文件位置」分组（可自定义两个目录）",
+          any("引擎文件位置" in t for t in titles), str(titles))
+    check("对话框写明联网下载的默认落点是用户目录（不用搬文件）",
+          se.default_download_dir() in "\n".join(
+              w.text() for w in dlg.findChildren(QLabel)))
+    check("命令框含 dry-run 查看命令（版本号与落点都从它来）",
+          "--dry-run" in dlg.box_dryrun.toPlainText())
+    check("路线 3 文本给出镜像地址与版本号",
+          "registry.npmmirror.com" in dlg.box_route3.toPlainText()
+          and se.browser_registry()["chromium_version"]
+          in dlg.box_route3.toPlainText())
+    check("对话框的命令框含 pip --target 命令",
+          "--target" in dlg.box_route2.toPlainText())
+    check("对话框给出复制命令的动作", dlg.copy_command() is True)
+    check("复制的是当前该用的那段命令",
+          QGuiApplication.clipboard().text() == dlg._command)
+    check("对话框有「打开浏览器目录」「打开外挂依赖目录」两个动作",
+          dlg.btn_open_browsers.isEnabled() and dlg.btn_open_pkgs.isEnabled())
+    dlg.deleteLater()
+
+    # ---- 设置窗口里的「反检测强化」分组 ----
+    prefs2 = UserPrefs()
+    calls = []
+    dlg2 = SettingsDialog(prefs=prefs2, apply_cb=lambda: calls.append(1))
+    titles2 = [g.title() for g in dlg2.findChildren(QGroupBox)]
+    check("设置窗口第一组是「反检测强化」",
+          any("反检测强化" in t for t in titles2), str(titles2))
+    from config.default_settings import ANTIBOT_ITEMS
+    check("六个子项全部出现在窗口里",
+          all(key in dlg2._boxes for key, _l, _h in ANTIBOT_ITEMS),
+          str(sorted(dlg2._boxes)))
+    check("每个子项都有说明（不是光秃秃一个勾选框）",
+          all(box.toolTip() for box in dlg2._boxes.values()))
+    check("还有「拦截可见广告素材」这一项（默认关）",
+          dlg2.chk_creatives is not None
+          and prefs2.block_ad_creatives is False)
+    # 改一项：要写进偏好并回调外部应用
+    old = prefs2.hide_canvas
+    dlg2._boxes["hide_canvas"].setChecked(not old)
+    check("改子项会写偏好并触发应用回调",
+          prefs2.hide_canvas is (not old) and bool(calls),
+          f"prefs={prefs2.hide_canvas} calls={len(calls)}")
+    prefs2.hide_canvas = old
+    # 总开关关掉后子项置灰（避免给出「勾了也不生效」的开关）
+    dlg2.chk_master.setChecked(False)
+    check("总开关关掉后子项全部置灰",
+          all(not b.isEnabled() for b in dlg2._boxes.values())
+          and not dlg2.chk_creatives.isEnabled())
+    dlg2.chk_master.setChecked(True)
+    check("总开关重新打开后子项恢复可用",
+          all(b.isEnabled() for b in dlg2._boxes.values()))
+    check("总开关状态也持久化", prefs2.antibot_enabled is True)
+
+    # ---- 设置窗口里的「引擎文件位置」：真的会写偏好 + 同步到融合层 ----
+    check("路径框存在且默认留空（= 用默认位置）",
+          dlg2.edit_pkgs.text() == "" and dlg2.edit_browsers.text() == "")
+    import shutil as _sh
+    import tempfile as _tf
+    tmp_dir = os.path.join(_tf.gettempdir(), "_sc_ui_paths")
+    _sh.rmtree(tmp_dir, ignore_errors=True)
+    os.makedirs(tmp_dir, exist_ok=True)
+    try:
+        dlg2._set_path("pkgs", tmp_dir)
+        check("选完目录：写进偏好",
+              prefs2.site_packages_path == tmp_dir, prefs2.site_packages_path)
+        check("选完目录：融合层立即生效（不用重启）",
+              se.site_packages_dir() == tmp_dir, se.site_packages_dir())
+        check("选完目录：路径框回填",
+              dlg2.edit_pkgs.text() == tmp_dir, dlg2.edit_pkgs.text())
+        dlg2._set_path("browsers", tmp_dir)
+        check("浏览器目录同理",
+              prefs2.browsers_path == tmp_dir
+              and se.browser_target_dir() == tmp_dir,
+              f"{prefs2.browsers_path} / {se.browser_target_dir()}")
+        check("浏览器目录生效后状态区说明来源（自定义）",
+              "自定义" in dlg2.lbl_path_note.text()
+              or "自定义" in dlg2.lbl_dir.text(),
+              dlg2.lbl_path_note.text() or dlg2.lbl_dir.text())
+        dlg2._set_path("pkgs", "")
+        dlg2._set_path("browsers", "")
+        check("「恢复默认」清空偏好并回到内置目录",
+              prefs2.site_packages_path == ""
+              and prefs2.browsers_path == ""
+              and se.site_packages_dir() == se.SITE_PACKAGES_DIR,
+              f"{prefs2.site_packages_path!r} / {se.site_packages_dir()}")
+    finally:
+        _sh.rmtree(tmp_dir, ignore_errors=True)
+    dlg2.deleteLater()
+
+    # ---- 左面板：反检测总开关 + 下载格式预设 ----
+    check("左面板有反检测总开关", lp.antibot_chk is not None
+          and lp.antibot_enabled() in (True, False))
+    check("左面板有「反检测详细设置」入口",
+          lp.btn_antibot is not None and lp.btn_antibot.text() != "")
+    fired2 = []
+    lp.antibot_settings_clicked.connect(lambda: fired2.append(1))
+    lp.btn_antibot.click()
+    check("点它会请求打开设置窗口", bool(fired2))
+    check("左面板有下载格式预设下拉", lp.preset_combo is not None
+          and lp.preset_combo.count() >= 6, str(lp.preset_combo.count()))
+    lp.set_download_preset("media")
+    check("预设展开成完整媒体扩展名（含 m3u8）",
+          "m3u8" in lp.download_exts() and "mp3" in lp.download_exts(),
+          lp.download_exts()[:50])
+    lp.set_download_preset("all")
+
+    # ---- 随包分发的用户指南 ----
+    guide = os.path.join(ROOT, "浏览器增强包安装指南.md")
+    check("用户指南在仓库根目录", os.path.isfile(guide), guide)
+    if os.path.isfile(guide):
+        with open(guide, "r", encoding="utf-8") as fh:
+            doc = fh.read()
+        for key in ("chromium-1243", "chrome-headless-shell-win64",
+                    "INSTALLATION_COMPLETE", "PYTHONPATH",
+                    "scrapling[fetchers]", "--python", "winldd-1007"):
+            check(f"指南含关键点 {key}", key in doc)
+        check("指南里没有 scrapling[all] 的安装指引",
+              "scrapling[all]" not in doc)
+        check("指南说明了 3.13 是免安装版的 ABI 约束",
+              "3.13" in doc and "ABI" in doc)
+
+
 def main():
     from core import scrapling_engine as se
 
@@ -571,6 +877,7 @@ def main():
     test_extra_site_packages(se)
     test_extra_dir_appears_later(se)
     test_version_and_browsers(se)
+    test_custom_paths(se)
 
     # ---- 超时单位（浏览器引擎是毫秒，HTTP 是秒）----
     check("seconds_to_ms: 90 → 90000", se.seconds_to_ms(90) == 90000,
@@ -596,6 +903,9 @@ def main():
 
     # ---- 3. 接入层（Task / 左面板 / 偏好 / HTML 注入）----
     integration()
+
+    # ---- 3b. 安装指引的界面部分与用户指南 ----
+    test_engine_setup_ui(se)
 
     # ---- 4. 需要 scrapling 的用例 ----
     if not se.available():
@@ -690,7 +1000,59 @@ def main():
           se.extract_records(HTML_OLD, "https://e.com", ".old-card",
                              [Field("bad", ">>>", "text")]) is not None)
 
-    # ---- 7. 联网用例（失败记 SKIP，不算 FAIL）----
+    # ---- 7. 运行期开关：真实请求头 / TLS 指纹档案 ----
+    from core import headers as H
+
+    check("运行期开关默认全开",
+          se.runtime_options() == {"auto_headers": True, "tls_spoof": True},
+          str(se.runtime_options()))
+    gen = se.headers_for("https://example.com/a", referer="https://www.google.com/")
+    check("headers_for 给出整套自洽请求头",
+          bool(gen) and H.consistency_issues(gen.get("User-Agent", ""), gen) == [],
+          str(sorted(gen))[:120])
+    check("Referer 与 Sec-Fetch-Site 对得上（不会一个说来自 Google、一个说 none）",
+          gen.get("Sec-Fetch-Site") == "cross-site" and gen.get("Referer"),
+          str(gen.get("Sec-Fetch-Site")))
+    check("无 Referer 时 Sec-Fetch-Site=none",
+          se.headers_for("https://example.com/a").get("Sec-Fetch-Site") == "none")
+    se.set_runtime_options(auto_headers=False)
+    check("关掉真实请求头后 headers_for 返回空（不半途而废）",
+          se.headers_for("https://example.com/a") == {}
+          and se.browser_identity() == {}, str(se.headers_for("https://e.com")))
+    se.set_runtime_options(auto_headers=True)
+
+    ident = se.browser_identity()
+    check("浏览器引擎的地区身份成对给出（locale + 时区）",
+          ident.get("locale") == H.locale()
+          and ident.get("timezone_id") == H.timezone_id(),
+          str(ident))
+    check("locale 与 Accept-Language 同源（不会一个中文一个英文）",
+          H.accept_language().startswith(H.locale().split("-")[0]),
+          f"{H.locale()} / {H.accept_language()}")
+    check("时区与 locale 匹配（中文环境不是 UTC）",
+          H.timezone_id() == "Asia/Shanghai" or os.environ.get(
+              "SMARTCRAWLER_TIMEZONE"), H.timezone_id())
+
+    tls = H.tls_profile()
+    if tls["available"]:
+        check("TLS 档位与 UA 版本接近（不是随手挑一个）",
+              tls["target"].startswith("chrome")
+              and abs(int("".join(c for c in tls["target"] if c.isdigit()))
+                      - H.chrome_major()) <= 8,
+              str(tls))
+        check("TLS 档位来自 curl_cffi 的真实可选列表（没有写死）",
+              tls["target"] in H.impersonate_targets(), str(tls))
+    else:
+        skip("TLS 档位检查", "curl_cffi 不可用")
+
+    # ---- 8. Scrapling 噪声日志被压掉 ----
+    check("噪声过滤器已安装（'No Cloudflare challenge found.' 不再当 ERROR）",
+          any(isinstance(f, se._ScraplingNoiseFilter)
+              for f in logging.getLogger("scrapling").filters),
+          str(logging.getLogger("scrapling").filters))
+    check("cloudflare_noise_count 可读", isinstance(se.cloudflare_noise_count(), int))
+
+    # ---- 9. 联网用例（失败记 SKIP，不算 FAIL）----
     try:
         res = se.http_get("https://example.com", timeout=25)
         if not res.ok:

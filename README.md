@@ -1,11 +1,19 @@
 # SmartCrawler 智能可视化爬虫
 
 ![Version](https://img.shields.io/badge/version-0.0.4-blue)
-![Python](https://img.shields.io/badge/python-3.10%2B-blue)
+![Platform](https://img.shields.io/badge/platform-Windows-blue)
+![Python](https://img.shields.io/badge/python-3.13-blue)
 ![PySide6](https://img.shields.io/badge/PySide6-6.6%2B-green)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)
 [![Release](https://img.shields.io/github/v/release/J-R-R-J/smart_crawler?label=release)](https://github.com/J-R-R-J/smart_crawler/releases/latest)
+
+> **运行环境说明**（这三个 3.13 是同一件事，别和其它要求混起来）：
+> 免安装版是 **Windows 10/11 64 位**，内部**自带 Python 3.13 运行时**，
+> 不需要你装 Python。装了之后如果要再补 Scrapling 与它的浏览器，
+> **外挂依赖必须用 3.13.x 的 Python 安装**（和内置运行时同一次版本，
+> 否则带 C 扩展的包 ABI 不匹配）。
+> 只有**源码运行**才放宽到 Python 3.10+ —— 那时用的是你自己的解释器。
+> 详细步骤见 [浏览器增强包安装指南](浏览器增强包安装指南.md)。
 
 一个基于 **PySide6 + QtWebEngine** 的桌面爬虫工具：把浏览器内核嵌进界面，所见即所抓；
 遇到验证码、人机校验、登录墙或弹窗时自动暂停，把页面交给人处理，处理完自动继续抓取。
@@ -23,6 +31,7 @@
 - [下载](#下载)
 - [主要特性](#主要特性)
 - [环境要求](#环境要求)
+- [浏览器增强包安装指南](浏览器增强包安装指南.md)
 - [安装](#安装)
 - [快速开始](#快速开始)
 - [命令行参数](#命令行参数)
@@ -78,7 +87,7 @@
 | 项目 | 说明 |
 | --- | --- |
 | 文件名 | `smart_crawler-v0.0.4.zip` |
-| 大小 | 约 215 KB |
+| 大小 | 约 343 KB |
 | 内容 | 完整源码（配置 / 核心 / 界面 / 工具 / 测试 / 文档），**不含**虚拟环境与运行时数据 |
 
 解压后按「[安装](#安装)」章节装依赖，再运行 `python main.py`。
@@ -104,34 +113,50 @@ cd smart_crawler
 | 反爬识别 | 验证码 / 滑块 / 人机校验 / 访问频控 / 登录墙关键词识别 |
 | 结构化确认 | 命中关键词后再扫描页面是否真有验证组件（输入框 / 第三方 iframe / 组件容器 / 图形码），区分「已确认」与「疑似」，显著降低误判 |
 | 多源检测 | 同时扫描 HTML 源码、页面标题、URL 与**渲染后的可见文本**，并自动忽略零宽字符与空格干扰 |
+| 源码噪声不误判 | 拿到足够长的渲染文本时，关键词只在**可见范围**里比对；只在 HTML 脚本里出现的字样不再拦任务，只记一条日志 |
 | 关键词可自定义 | 三类识别关键词均可在界面中编辑，立即生效，无需改代码或重启 |
 | 人机协作 | 检测到验证时自动暂停，轮询检测恢复后自动继续，无需重跑任务 |
 | 误判可跳过 | 横幅提供「跳过（误判）」按钮，跳过后立即继续且本任务内不再因验证暂停 |
 | 可视化拾取 | 点击页面上任意元素自动生成 CSS 选择器，无需手写 |
-| 18 种抓取格式 | 覆盖结构化记录、表格、链接、图片、正则、JSON-LD 等常见需求，可扩展 |
+| 20 种抓取格式 | 覆盖结构化记录、表格、链接、**图片/视频/音频全格式媒体**、正则、JSON-LD 等常见需求，可扩展 |
 | 多格式复选 | 一次勾选多种格式同时提取并合并结果，每条记录带 `_mode` 标记来源 |
 | 弹窗处理 | 三种策略可选：只报告 / 点击关闭按钮 / 直接移除 DOM，处理多轮弹窗 |
 | 反爬对抗 | 自动化标志与框架残留标记清理、硬件/插件/WebGL 一致性伪装、每页延迟随机抖动 |
+| 反检测强化 | 抗广告/追踪器干扰、自动生成真实请求头、TLS 指纹伪装、Canvas 指纹干扰、WebRTC 泄露防护、Cloudflare 自动绕过（六项可逐项开关） |
 | Cookie 管理 | 表格化查看、编辑、删除、清空、导入、导出，支持会话标记显示 |
 | 多 Profile | 不同站点使用不同身份，登录态互相隔离，可新建 / 删除 / 设为默认 |
 | 自动翻页 | 支持自定义「下一页」选择器与最大页数，翻页失败有兜底逻辑 |
 | 懒加载滚动 | 可选自动滚动触发懒加载，适配无限滚动页面 |
-| 结果导出 | CSV（UTF-8 BOM，Excel 可直接打开）与 JSON；导出目录可自定义并记忆 |
-| 下载控制 | 可限制单个文件大小上限，并可用扩展名白名单只放行指定格式 |
+| 结果导出 | **11 种格式**：CSV / TSV / JSON / JSON Lines / Excel(xlsx) / Markdown / HTML / 纯文本 / XML / YAML / SQLite，全部零第三方依赖；导出目录可自定义并记忆 |
+| 单条导出 | 数据区**右键**即可导出某一条数据（任选格式）、把该条的图片/视频/音频**导出成真实文件**（本地已有直接复制、缺失的现下），或复制单元格 / 整行 / 整列 / JSON |
+| 文件批量导出 | 一次把结果里引用的全部媒体导出到指定目录，带进度、可中途停止、逐项列出成功与失败原因 |
+| 下载控制 | 可限制单个文件大小上限，并可按「媒体 / 文档 / 压缩包」预设或自定义扩展名白名单放行 |
 | 临时文件清理 | 一键清理引擎缓存、`__pycache__` 与临时日志，不影响 Profile 与 Cookie |
 | 自适应界面 | 窗口按屏幕自适应尺寸，左侧配置面板可滚动，小屏与最大化下都不会挤压控件 |
 | 日志落盘 | 按天生成日志文件，单文件 5 MB 轮转，保留 3 份历史 |
-| 单进程渲染 | 默认单进程软渲染，在容器 / 无 GPU / 远程桌面 / CI 环境下也能稳定运行 |
+| 渲染模式自适配 | 无头平台自动加 `--single-process`；桌面多进程运行（单进程会让代理设置失效、Service Worker 报错） |
 
 ---
 
 ## 环境要求
 
-- **Python 3.10 或更高版本**
+按「你怎么用」分两栏看，别把两栏的版本要求混起来：
+
+| 使用方式 | 操作系统 | Python | 说明 |
+| --- | --- | --- | --- |
+| **免安装版**（Release 附件） | **Windows 10/11 64 位** | **3.13（内置，无需安装）** | 解压即用；补装 Scrapling 外挂依赖时必须用 3.13.x 的 Python |
+| **源码运行** | Windows / Linux / macOS | 3.10 或更高 | 用你自己的解释器，版本由你决定 |
+
 - **PySide6 >= 6.6.0**（必须包含 QtWebEngine，即完整版 `PySide6`，不是 `PySide6-Essentials`）
-- 操作系统：Windows / Linux / macOS
 - 可选：[Scrapling](#抓取引擎scrapling-融合) —— 不装也能用，装上后解锁
   HTTP 快速模式、隐身引擎、动态引擎与自适应选择器
+
+> **为什么免安装版死认 3.13**：外挂依赖目录里装的是带 C 扩展的包
+> （`curl_cffi` / `greenlet` / `lxml`），必须与 exe 内置的那套运行时
+> 同一次版本，否则导入就报 ABI 不匹配。这是**免安装版自己的约束**，
+> 与「Scrapling 支持哪些 Python 版本」（它自己的要求是 >=3.10）是两件事。
+>
+> 逐步操作见 **[浏览器增强包安装指南](浏览器增强包安装指南.md)**。
 
 ---
 
@@ -243,6 +268,9 @@ python main.py
 - **启用反爬特征伪装**：默认开启，隐藏自动化浏览器特征并让延迟随机抖动
 - **下载上限**：单个文件的下载大小上限（MB），0 表示不限制
 - **下载格式**：只放行指定扩展名（如 `pdf,csv,xlsx`），留空表示不限
+- **过滤站点素材图（图标 / 表情 / 头像）**：默认关闭。勾选后丢掉站点自己的 UI 素材，
+  只留正文图 —— 内容平台（抖音、小红书等）建议勾上，详见
+  [Q：只抓到图标 / 表情 / 头像，抓不到正文图？](#q只抓到图标--表情--头像抓不到正文图)
 
 > 左侧面板内容较长，**已做成可滚动**：窗口再矮也能滚到全部配置。
 > 窗口初始尺寸会按你的屏幕自适应，不会默认高过屏幕。
@@ -257,10 +285,13 @@ python main.py
 
 ### 第 7 步：导出结果
 
-在 **数据** 标签页点击 **导出 CSV** 或 **导出 JSON**。
+在 **数据** 标签页点 **导出为…**（11 种格式任选），或直接用 **导出 CSV** / **导出 JSON** 快捷按钮。
 
 导出目录默认为 `crawler_data/exports/`，也可以点 **导出目录…** 指定自定义目录，程序会记住它
 （下次导出默认用该目录，并在实际保存后自动记忆你最后选择的目录）。
+
+想只导出某一条：在数据区**右键**该行 → **导出此条数据…**（选格式），或 **快速导出为 JSON**（不弹窗）。
+如果这条记录里有图片 / 视频 / 音频，右键还能 **导出此条的文件…** 直接拿到真实文件。
 
 ---
 
@@ -287,7 +318,7 @@ PySide6 6.9.3  QtWebEngine/QtWebChannel/QtPrintSupport OK
 scrapling: 0.4.15 已就绪（HTTP 快速模式 / 隐身引擎 / 动态引擎 / 自适应选择器可用）
 window_icon: J:\...\smart_crawler\assets\appicon.ico
 console: 有控制台窗口（可显示/隐藏）  visible=True
-modules: 33 ok, 0 failed
+modules: 38 ok, 0 failed
 SELFTEST RESULT: OK
 ```
 
@@ -318,22 +349,56 @@ SELFTEST RESULT: OK
 | 2 | 列表文本 | `list` | 提取容器下所有元素的文本行 | 是 |
 | 3 | 表格数据 | `table` | 提取页面 `<table>` 的二维数据，自动识别表头 | 否 |
 | 4 | 链接列表 | `links` | 提取所有 `<a>` 的文本与链接 | 否 |
-| 5 | 图片列表 | `images` | 提取所有 `<img>` 的地址与 alt | 否 |
+| 5 | 图片列表（全格式） | `images` | `img` / `srcset` / 懒加载属性 / `<picture>` / 背景图 / `og:image` / 内嵌 JSON | 否 |
 | 6 | 页面文本 | `text` | 提取页面纯文本内容 | 否 |
 | 7 | 页面 HTML | `html` | 提取完整 HTML 源码 | 否 |
 | 8 | 正则提取 | `regex` | 用正则表达式从 HTML 中提取，支持捕获组 | 否 |
 | 9 | JSON-LD | `jsonld` | 解析 `<script type="application/ld+json">` 结构化数据 | 否 |
 | 10 | Meta 信息 | `meta` | 提取 title / description / keywords 等元信息 | 否 |
 | 11 | 表单数据 | `forms` | 提取所有 `<form>` 的字段、类型与默认值 | 否 |
-| 12 | 视频地址 | `video` | 提取 `<video>` 与 `<source>` 的地址（自动去重） | 否 |
-| 13 | iframe 地址 | `iframe` | 提取所有 `<iframe>` 的 src | 否 |
-| 14 | RSS 订阅 | `rss` | 提取页面声明的 RSS / Atom 订阅地址 | 否 |
-| 15 | Sitemap | `sitemap` | 提取页面声明的站点地图链接 | 否 |
-| 16 | 联系方式 | `contacts` | 从页面文本中提取邮箱与电话号码 | 否 |
-| 17 | 内嵌 JSON | `embedded_json` | 解析页面内嵌的 JSON 脚本块 | 否 |
-| 18 | 页面 Cookie | `page_cookies` | 提取当前页面的 Cookie 快照 | 否 |
+| 12 | 视频地址（全格式） | `video` | `video`/`source`/`poster`/HLS(`m3u8`)/DASH(`mpd`)/`og:video`/平台 iframe/内嵌 JSON | 否 |
+| 13 | 音频地址（全格式） | `audio` | `audio`/`source`/`og:audio`/内嵌 JSON 里的音频直链 | 否 |
+| 14 | 全部媒体 | `media` | 一次抓齐图片 + 视频 + 音频，用 `kind` 列区分 | 否 |
+| 15 | iframe 地址 | `iframe` | 提取所有 `<iframe>` 的 src | 否 |
+| 16 | RSS 订阅 | `rss` | 提取页面声明的 RSS / Atom 订阅地址 | 否 |
+| 17 | Sitemap | `sitemap` | 提取页面声明的站点地图链接 | 否 |
+| 18 | 联系方式 | `contacts` | 从页面文本中提取邮箱与电话号码 | 否 |
+| 19 | 内嵌 JSON | `embedded_json` | 解析页面内嵌的 JSON 脚本块 | 否 |
+| 20 | 页面 Cookie | `page_cookies` | 提取当前页面的 Cookie 快照 | 否 |
 
 所有格式统一输出为「字典列表」，便于导出与二次处理。
+
+### 媒体格式「全支持」到底支持什么
+
+「全支持」不是一句宣传语，而是四路并行采集。只看 `<img src>` 会把绝大多数
+站点抓漏，原因是：
+
+| 漏抓原因 | 覆盖方式 |
+| --- | --- |
+| 懒加载：`src` 是 1×1 占位图，真地址在 `data-src` 等属性里 | 依次探测 24 个常见懒加载属性（`data-src` / `data-original` / `data-lazy-src` / `data-actualsrc` / `data-echo` …） |
+| 响应式：真地址在 `srcset` / `<picture><source>` 里 | 解析全部候选，按 `w`/`x` 描述符取**最大**那张；浏览器实际选中的那张记在 `current` 列 |
+| 视频站把地址藏在内嵌 JSON（`RENDER_DATA` / `__INITIAL_STATE__`） | 扫描原始 HTML，还原 `\/` 与 `\u002F` 转义后再匹配（抖音、快手、小红书都是这个写法） |
+| 背景图写在 CSS 里 | 读内联 `style`、`data-bg*` 属性，以及文档 CSSOM 规则里的 `background-image` |
+| 只认 `<video src>`，漏掉流媒体 | 同时识别 `m3u8`(HLS) / `mpd`(DASH) / `mp4` / `webm` / `flv` 等，并收录 `og:video`、`<link rel=preload>`、视频平台 iframe |
+| `blob:` 地址无法直接下载 | 仍然收录，但标注 `blob: true` 与 `downloadable: false` |
+
+扩展名清单集中在 `config/default_settings.py`（`IMAGE_EXTS` / `VIDEO_EXTS` /
+`AUDIO_EXTS`），提取脚本与下载白名单预设**共用同一份** —— 加一个新格式
+两边同时生效，不会出现「提取认、下载不认」。
+
+### 下载格式预设
+
+左侧「下载格式」是一个下拉预设，选中后自动把扩展名列表填进输入框
+（仍可手改，手改后下拉自动切到「自定义」）：
+
+| 预设 | 放行的扩展名 |
+| --- | --- |
+| 不限格式 | 全部允许（输入框留空） |
+| 仅媒体 | 图片 + 视频 + 音频，共 66 个扩展名（含 `m3u8` / `mpd`） |
+| 仅图片 / 仅视频 / 仅音频 | 单类 |
+| 图片 + 视频 | 两类 |
+| 文档 | `pdf` / office / 文本 / 电子书 |
+| 压缩包与安装包 | `zip` / `rar` / `7z` / `iso` … |
 
 ---
 
@@ -503,6 +568,49 @@ WebGL 相关项会显示 `no-webgl`（没有 GPU 上下文），属环境限制�
 
 ---
 
+## 反检测强化（六项）
+
+左上角 **设置** → **① 反检测强化**，或左侧「③ 翻页与抓取节奏」里的
+**启用反检测强化** 总开关（关掉即六项全关，用来排查「抓不到是不是伪装的锅」）。
+每项都可单独开关，改动立即生效并写入 `crawler_data\settings.ini`。
+
+| 项目 | 做什么 | 为什么 |
+| --- | --- | --- |
+| 抗广告/追踪器干扰 | 拦截第三方埋点与广告域名请求，填平反广告探测变量，拆掉「请关闭广告拦截插件」遮罩 | 追踪脚本会劫持滚动改懒加载、往 DOM 插浮层、上报行为特征；反广告脚本还会误伤抓取流程 |
+| 自动生成真实请求头 | 浏览器引擎按请求补齐 `sec-ch-ua*` / `Sec-Fetch-*` / `Accept-Language`；HTTP 引擎发出整套头 | 反爬很少只看 UA，而是看 **UA ↔ sec-ch-ua 版本 ↔ 平台 ↔ 语言** 是否互相印证 |
+| TLS 指纹伪装 | HTTP 快速模式用 `curl_cffi` 伪装浏览器 TLS 握手（JA3/JA4）；档位**动态挑选** | 写死档位换台机器就会报 `ImpersonateError`；写死 UA 版本又会与档位差好几个大版本 |
+| Canvas 指纹干扰 | 给 `toDataURL` / `toBlob` / `getImageData` / WebGL `readPixels` 加**确定性**微小噪声 | 噪声必须每次一致：同一画布两次读到不同结果，比不伪装更容易被识别 |
+| WebRTC 泄露防护 | 强制 `iceTransportPolicy=relay` + 过滤含私有 IP 的候选；配合 Chromium 的 `--force-webrtc-ip-handling-policy` | 即使用了代理，WebRTC 也会绕过代理枚举本机网卡，把内网/真实出口 IP 交给页面 |
+| Cloudflare 自动绕过 | 识别到**非交互** JS 挑战时自动改用隐身引擎重试一次；交互式 Turnstile 才提示人工 | 以前只要命中关键词就停下等人，而 JS 挑战等几秒自己就过了，白让用户守着屏幕 |
+
+### 几个刻意的取舍
+
+- **只拦追踪器，不拦可见广告素材**（默认关）。把 AdSense 那类可见广告位也拦掉，
+  等于向站点的反广告脚本自首 —— 它们正是靠「广告元素有没有加载成功」来判断你装没装拦截器。
+  需要更激进时可在设置里单独打开。
+- **不拦风控 / 人机校验域名**（Cloudflare、DataDome、PerimeterX、腾讯验证码…）。
+  拦住它们不会让站点放行，只会让站点立刻判定你在屏蔽检测脚本。名单写在
+  `core/antibot.py` 的 `NEVER_BLOCK` 里，**永不拦截**。
+- **隐身 / 动态引擎不硬塞我们自己生成的请求头**：Playwright 的 Chromium 本来就会发
+  完整且与引擎版本自洽的头，塞一份版本对不上的反而露馅。那边只对齐 `locale` 与
+  时区（`Asia/Shanghai` + `zh-CN`），避免出现「中文环境 + UTC 时区」这种组合。
+
+### 相关环境变量
+
+| 变量 | 作用 |
+| --- | --- |
+| `SMARTCRAWLER_CHROME_MAJOR` | 覆盖 UA / Client Hints 的 Chromium 主版本号（站点风控升级、程序还没跟上时用） |
+| `SMARTCRAWLER_UA_SUFFIX` | 追加到 UA 末尾（默认不加；加工具名等于自报自动化） |
+| `SMARTCRAWLER_ACCEPT_LANGUAGE` | 覆盖 `Accept-Language` 与 `locale` 的推导来源 |
+| `SMARTCRAWLER_LOCALE` | 覆盖浏览器引擎的 `locale` |
+| `SMARTCRAWLER_TIMEZONE` | 覆盖浏览器引擎的时区 |
+| `SMARTCRAWLER_SINGLE_PROCESS` | 置 `1` 强制单进程渲染（默认只在无头平台自动启用） |
+
+> UA 版本号默认**从运行中的引擎反查**（`QWebEngineProfile` 读自身 UA），
+> 因此不会被写死成某个过期版本。
+
+---
+
 ## 抓取引擎（Scrapling 融合）
 
 左侧配置面板的「② 抓取引擎（反检测）」决定**页面 HTML 从哪里来**：
@@ -608,7 +716,39 @@ python -m pip install --target "<解压目录>\SmartCrawler\crawler_data\site-pa
 | 包装了、浏览器没就位 | HTTP 快速模式与自适应选择器可用；隐身 / 动态引擎还需要浏览器 |
 | 都齐了 | Scrapling 已就绪，四种引擎均可用 |
 
+### 引擎文件位置（可自定义）
+
+包与浏览器合计数百 MB，装在别的盘完全合理；而 playwright 联网下载默认落在
+**用户目录** `%LOCALAPPDATA%\ms-playwright`，不是程序目录。
+所以这两个目录都可以在界面里指定：**「设置」→「④ 引擎文件位置」**。
+
+| 项目 | 默认值 | 说明 |
+| --- | --- | --- |
+| 外挂依赖目录（scrapling） | `<程序目录>\crawler_data\site-packages\` | `pip --target` 的目标目录 |
+| 浏览器目录（ms-playwright） | `<程序目录>\ms-playwright\` | 也可指向 `%LOCALAPPDATA%\ms-playwright` |
+| 偏好键 | `site_packages_path` / `browsers_path` | 写在 `crawler_data\settings.ini` |
+
+- **改完立即生效，不必重启**（换目录时会撤掉旧的 `sys.path` 条目并重置惰性加载状态，
+  否则会出现「界面改了目录、程序还从旧目录导入」）。
+- 优先级：**环境变量 `PLAYWRIGHT_BROWSERS_PATH` > 界面自定义 > 自动探测**；
+  环境变量在生效时，设置窗口会明确提示（不覆盖用户自己设过的环境变量是既定行为）。
+- playwright 下到用户目录时**不用搬文件**，把浏览器目录指过去即可。
+
+想确认「这次到底会下到哪、下哪个版本」：
+
+```powershell
+# 源码运行
+<项目>\.venv\Scripts\python.exe -m playwright install --dry-run
+```
+
+输出里的 `Install location` 是落点、`Download url` 里的 `builds/cft/<版本号>/`
+就是镜像路径要用的版本号（详见安装指南的路线 3）。
+
 ### 浏览器增强包（只有隐身 / 动态引擎需要）
+
+> **一步步照着做**：见 **[浏览器增强包安装指南](浏览器增强包安装指南.md)**
+> （免安装版与源码运行分开写，含已踩过的坑与验证命令）。
+> 界面里对应两个入口：左侧「复制安装命令」按钮、左上角「设置」按钮。
 
 先看清需求，别白下 700 MB：
 
@@ -879,16 +1019,64 @@ QtWebEngine 在单进程渲染模式下**只允许存在一个浏览器引擎实
 
 | 标签页 | 内容 |
 | --- | --- |
-| 数据 | 抓取结果的表格视图，列会自动适配 |
+| 数据 | 抓取结果的表格视图，列会自动适配；**右键有完整操作菜单** |
 | JSON | 原始结果 JSON，方便复制或二次处理 |
 | Cookie | Profile 与 Cookie 管理 |
 | 日志 | 实时运行日志（同时写入磁盘） |
 | 任务 | 任务汇总信息（条数、耗时、当前 URL、Profile、弹窗策略） |
 
-导出格式：
+### 11 种导出格式
 
-- **CSV**：UTF-8 with BOM 编码，Excel 直接双击即可正常显示中文
-- **JSON**：标准 JSON 数组，缩进 2 空格
+点 **导出为…** 选择格式，或右键某一行导出**单条**。全部格式都用 Python 标准库实现，
+**不需要额外安装任何东西**（xlsx 也不是靠 openpyxl，而是按 OOXML 最小子集手写）。
+
+| 格式 | 扩展名 | 适用场景 |
+| --- | --- | --- |
+| CSV | `.csv` | UTF-8 with BOM，Excel 双击即可正常显示中文 |
+| TSV | `.tsv` | 制表符分隔，粘进 Excel / 数据库工具不串列 |
+| JSON | `.json` | 标准 JSON 数组，缩进 2 空格（**单条导出时写成一个对象**） |
+| JSON Lines | `.jsonl` | 每行一个对象，流式处理大数据集 |
+| Excel | `.xlsx` | 真·Excel 工作簿，冻结首行 + 自动筛选，打开即可按列筛 |
+| Markdown | `.md` | 带条数/字段说明的表格，写文档直接贴 |
+| HTML | `.html` | 自包含网页表格（内联样式），双击就能看，URL 自动变成可点链接 |
+| 纯文本 | `.txt` | 等宽对齐的表格（中文按双宽对齐，不会歪）；单条导出改成「字段：值」清单 |
+| XML | `.xml` | 列名自动转成合法标签名（中文列名保留） |
+| YAML | `.yaml` | 列表形式，数字/布尔/null 与字符串分得清 |
+| SQLite | `.db` | 建表并插入，列类型自动推断（整数 / 实数 / 文本），可直接用 SQL 查询 |
+
+### 数据区右键菜单
+
+在 **数据** 标签页任意一行上右键：
+
+| 菜单项 | 说明 |
+| --- | --- |
+| 复制单元格 / 整行 / 整列 / 为 JSON | 复制到剪贴板，整行为制表符分隔（可直接粘进表格） |
+| 导出此条数据… | 11 种格式任选，保存单条 |
+| 快速导出为 JSON | 不弹窗，直接写到导出目录 |
+| 导出此条的文件（N 个）… | 把这条记录里的图片 / 视频 / 音频导出成真实文件 |
+| 该文件另存为… | 只有 1 个文件时出现，按你输入的确切路径保存 |
+| 打开该文件（本地已有） | 用系统默认程序打开（双击该行同效） |
+| 在浏览器中打开链接 | 打开该行的页面链接（不是媒体地址） |
+| 删除此行 | 从结果里移除（不动原始数据） |
+
+选中多行后右键，菜单会切换成批量版本（导出选中的 N 条数据 / N 个文件、删除选中行）。
+
+### 导出爬取到的文件
+
+「导出文件…」（底部按钮）与右键的「导出此条的文件…」走同一条链路，三种来源：
+
+1. **本地已下载** —— 抓取过程中浏览器下载到 `crawler_data/downloads/` 的文件直接**复制**过去，
+   不重复消耗流量，也不怕链接过期；
+2. **本地没有** —— 用标准库下载，并带上与浏览器一致的请求头；先写 `.part` 再改名，
+   中途失败不会留下「看起来完整」的坏文件；文件名没有扩展名时按响应 `Content-Type` 补一个；
+3. **内联 `data:` URL** —— base64 直接解码落盘（有些站点的图片是内联在页面里的）。
+
+`blob:` / `about:` 这类只在页面内有效的地址导出不了，会明确标成**已跳过并说明原因**——
+静默丢文件比报错更难查。导出过程在**独立线程**里跑，带进度条与「停止」按钮，
+结束后逐项列出「已复制 / 已下载 / 已存在 / 已跳过 / 失败」。同名文件不会互相覆盖，会自动加 `-1` 后缀。
+
+> 普通网页链接（`https://e.com/note/123` 这种没有文件扩展名的地址）**不算文件**，
+> 不会出现在「导出文件」里——它们由「在浏览器中打开链接」负责。
 
 ### 自定义导出目录
 
@@ -995,13 +1183,15 @@ smart_crawler/
 │   ├── banner.py               人类验证提示横幅
 │   ├── left_panel.py           抓取配置面板（多格式复选 + 运行设置）
 │   ├── center_panel.py         浏览器视图
-│   ├── right_panel.py          右侧五个标签页、导出与清理
+│   ├── right_panel.py          右侧五个标签页、数据区右键菜单、导出与清理
+│   ├── media_export.py         文件导出线程与进度对话框
 │   ├── cookie_panel.py         Cookie 与 Profile 管理面板
 │   └── keyword_dialog.py       检测关键词编辑对话框
 │
 ├── utils/                      工具层
 │   ├── logger.py               日志落盘（按天 + 5MB 轮转）
-│   ├── exporters.py            CSV / JSON / Cookie 导出导入
+│   ├── exporters.py            11 种结果导出格式 + Cookie 导入导出
+│   ├── media_files.py          行内媒体链接识别、本地文件定位、复制/下载导出
 │   ├── maintenance.py          临时文件统计与清理
 │   ├── js_runner.py            runJavaScript 封装（限流 + 同步等待）
 │   ├── appicon.py              窗口图标（优先用 ico 文件，缺失时矢量现画）
@@ -1158,7 +1348,7 @@ python main.py
 
 ```python
 SUPPORTED_FORMATS = [
-    # ... 现有 18 项 ...
+    # ... 现有 20 项 ...
     ("styles", "样式表", "提取页面引用的所有样式表"),
 ]
 ```
@@ -1207,19 +1397,19 @@ POPUP_CLOSE_SELECTORS.append(".my-site-close-btn")
 在项目根目录执行：
 
 ```bash
-# 冒烟测试：配置、模型、工具、偏好、UI 与 core 组装（46 项）
+# 冒烟测试：配置、模型、工具、偏好、请求头/反检测策略、UI 与 core 组装（76 项）
 .venv\Scripts\python.exe tests\test_smoke.py
 
 # 端到端测试：真实页面加载 + 翻页抓取 + Cookie + 元素拾取（9 项）
 .venv\Scripts\python.exe tests\test_e2e.py
 
-# 功能覆盖测试：18 种格式 + 弹窗三策略 + 结构化确认 + 检测增强 + 关键词 + 下载白名单 + 清理（64 项）
+# 功能覆盖测试：20 种格式（含媒体全格式）+ 弹窗三策略 + 结构化确认 + 检测增强 + 下载白名单 + 多格式导出/文件导出 + 清理 + 内容图识别/素材图过滤（145 项）
 .venv\Scripts\python.exe tests\test_feature.py
 
-# 界面交互测试：导航、多格式复选、滚动面板、窗口尺寸、停止复位、跳过按钮、各面板操作（64 项）
+# 界面交互测试：导航、多格式复选、下载预设、反检测总开关、数据区右键菜单、单条与文件导出、Cookie 清空竞态、滚动面板、停止复位（95 项）
 .venv\Scripts\python.exe tests\test_ui.py
 
-# Scrapling 融合测试：解析、自适应自愈、降级路径、接入层、外挂目录、浏览器就位判断（129 项）
+# Scrapling 融合测试：解析、自适应自愈、降级路径、接入层、请求头/TLS 档位、安装指引界面、自定义目录（219 项）
 .venv\Scripts\python.exe tests\test_scrapling.py
 
 # 界面外壳测试：窗口图标、控制台开关、样式表路径、新窗口请求（35 项）
@@ -1231,13 +1421,14 @@ Linux / macOS 使用 `python tests/test_smoke.py` 等形式即可。
 测试结果（本机 Python 3.13 + PySide6 6.9.3）：
 
 ```
-test_smoke.py     : 46 passed, 0 failed
-test_e2e.py       :  9 passed, 0 failed
-test_feature.py   : 64 passed, 0 failed
-test_ui.py        : 64 passed, 0 failed
-test_scrapling.py : 129 passed, 0 failed
-test_shell.py     : 35 passed, 0 failed
-合计              : 347 passed, 0 failed
+test_smoke.py     :  76 passed, 0 failed
+test_e2e.py       :   9 passed, 0 failed
+test_feature.py   : 145 passed, 0 failed
+test_ui.py        :  95 passed, 0 failed
+test_scrapling.py : 219 passed, 0 failed
+test_shell.py     :  35 passed, 0 failed
+合计              : 579 项断言 passed, 0 failed
+（另有 test_packaging.py 23 项，合计 602 项）
 ```
 
 > `test_scrapling.py` 中唯一联网的用例失败时会记为 **SKIP** 而非 FAIL，
@@ -1322,6 +1513,40 @@ export QTWEBENGINE_DISABLE_SANDBOX=1
 3. 是否需要登录（先在浏览器中登录，或切换已有登录态的 Profile）
 4. 是否动态渲染（勾选 **自动滚动触发懒加载**）
 
+**Q：只抓到图标 / 表情 / 头像，抓不到正文图？**
+
+内容平台（抖音、小红书、微博这类）的正文图有一个共同点：**地址里没有 `.jpg` 这种扩展名**。
+典型形态是抖音的 `https://p3-pc-sign.douyinpic.com/tos-cn-i-0813/xxx.image?biz_tag=aweme_images&…`，
+或者整页数据被塞进一段 `encodeURIComponent` 过的 `RENDER_DATA` 里
+（`https%3A%2F%2F…%3Fbiz_tag%3Daweme_images`）。
+只看扩展名的抓法在这种站点上一定失手：正文图一条都认不出来，反而把页面自己的
+图标 / 表情 / 头像（带 `/static-resource/`、`/emoji/`、`/avatar` 这些字样）全收了 ——
+这正是「只能抓到网站素材图」的原因。
+
+从 v0.0.4 起程序专门处理了这条路：
+
+1. **按 URL 标记认内容图**：`biz_tag=aweme_images`、`biz_tag=pcweb_cover`、
+   `tos-cn-i-0813`、`~tplv-dy-aweme-images`、`~tplv-*image`、`.image` 结尾等标记命中即算图片；
+   视频同理认 `biz_tag=aweme_video`、`douyinvod`、`.m3u8`。
+2. **百分号编码 / 转义还原**：`%3A%2F%2F`、`\/`、`\u002F`、`&amp;` 都会先还原再匹配，
+   所以那段 `RENDER_DATA` 里的直链也能被抓出来。
+3. **站点素材单独标记**：命中 UI 素材特征的记录会带上 `asset` 列（值为 `1`），
+   在 **运行设置** 里勾选 **过滤站点素材图（图标 / 表情 / 头像）** 就会把它们丢掉，
+   日志里会打印「已过滤 N 条站点素材图」。默认关闭，不影响其他站点。
+
+另外两点排查方向：
+
+- **不是「隐身 / 动态引擎」的问题**。默认的浏览器引擎就是真 Chromium，页面渲染出来的
+  DOM 与 `RENDER_DATA` 它都拿得到；换引擎不会让正文图凭空出现。引擎装不上是另一件事，
+  见 [抓取引擎](#抓取引擎scrapling-融合) 与
+  [浏览器增强包安装指南](浏览器增强包安装指南.md)。
+- **需要登录的内容先登录**：在中间浏览器区域里登录一次（登录态存进 Profile），
+  再开始抓取，否则站点返回的可能是登录墙而不是正文。
+- **页面自己跳转打断注入时不再算失败**：有些站点在页面脚本里立刻 `location.replace`，
+  导致程序注入的 HTML 报 `loadFinished(false)`。这种情况现在会记一条
+  「注入页面的加载被页面脚本中断（多为站点自行跳转），继续按已取回的 HTML 提取」
+  并继续提取，而不是直接结束任务。
+
 **Q：为什么多 Profile 不是多个浏览器实例？**
 
 因为单进程渲染模式下 QtWebEngine 只允许一个引擎实例，创建第二个会导致进程崩溃。
@@ -1405,6 +1630,17 @@ set SMARTCRAWLER_UA_SUFFIX=MyBot/1.0
 可以。点 **导出目录…** 选一次，之后每次导出都会默认用它；实际保存到别处后也会自动记住。
 配置写在 `crawler_data/settings.ini` 的 `export_dir`。
 
+**Q：导出的 Excel 打不开 / 提示格式不对？**
+
+不会。`.xlsx` 是按 OOXML 规范手写的最小包（不是把 CSV 改个后缀），Excel、WPS、
+LibreOffice 都能直接打开；表头已冻结并加了自动筛选。测试里会解包校验 XML 是否合法。
+
+**Q：右键「导出此条的文件」为什么有的是"已复制"？**
+
+因为那个文件在抓取时已经由浏览器下载到了 `crawler_data/downloads/`，
+程序直接复制过去，既不重复下载也不怕链接过期。若是"已下载"则是刚联网取回的。
+`blob:` 这类只在页面内有效的地址无法导出，会标成"已跳过"并写明原因。
+
 **Q：下载被拒绝了 / 日志提示超出大小限制？**
 
 说明该文件超过了左侧面板设置的 **下载上限**。把上限调大或设为 `0`（不限制）再试。
@@ -1457,6 +1693,11 @@ set SMARTCRAWLER_UA_SUFFIX=MyBot/1.0
 6. **未实现分布式与代理池**：如需大规模采集，建议在 `core/browser.py` 中接入
    代理配置，或改用专门的分布式爬虫框架。
 7. **选择器依赖页面结构**：站点改版后需要重新拾取。若站点提供 API，优先使用 API。
+8. **内容平台的图片地址会过期**：抖音这类站点的正文图直链带
+   `x-expires` 之类的签名参数，**过期后原地址就取不到文件了** ——
+   爬到的地址只是当时有效的直链。要留下文件请在爬完后尽快用
+   **「导出文件…」** 落盘（该功能优先直接复制本地已下载的副本）。
+   另外，需要登录才能看到的内容请先在中间浏览器里登录一次再抓。
 
 ---
 
@@ -1476,6 +1717,15 @@ set SMARTCRAWLER_UA_SUFFIX=MyBot/1.0
 - 引入 **Scrapling 融合层**（可选依赖，未安装时自动降级为浏览器引擎）
 - 新增**自适应选择器**：网站改版导致选择器失效时，依据元素特征自动重新定位
 - 字段选择器支持 `::text` / `::attr()` / XPath 等高级语法
+- **数据导出 2 种 → 11 种**（CSV / TSV / JSON / JSONL / Excel / Markdown / HTML /
+  TXT / XML / YAML / SQLite，全部零第三方依赖），数据区新增右键菜单，
+  新增**把爬到的图片 / 视频 / 音频导出成真实文件**
+- **安装指引重写**（界面「设置」窗口 + 《浏览器增强包安装指南.md》同步）：
+  目录树一行一条、新增**国内镜像路线**、写清联网下载的默认落点；
+  **外挂依赖目录与浏览器目录都能自定义**，不用搬文件
+- **内容平台的正文图能抓到了**：抖音这类站点的正文图没有常规扩展名，
+  改为**按 URL 标记识别** + 还原百分号编码；新增 **`asset` 列**与
+  **「过滤站点素材图」**开关（默认关闭）
 - 修复浏览器引擎超时单位错误（Scrapling 浏览器引擎用毫秒、HTTP 引擎用秒，
   原先把 60 秒传成了 60 毫秒，导致必然导航超时）
 

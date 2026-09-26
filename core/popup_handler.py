@@ -69,7 +69,14 @@ class PopupHandler(QObject):
         return (found, handled)
 
     def handle_all(self, max_rounds: int = 3) -> None:
-        """异步多轮处理：最多 max_rounds 轮，轮间 300ms，found==0 即停。"""
+        """异步多轮处理：最多 max_rounds 轮，轮间 300ms，found==0 即停。
+
+        **发现但一个也没处理掉时立刻停**（``found > 0 and handled == 0``）：
+        那种情况下再转两轮结果完全一样，只是白等 600ms，还会在日志里留下
+        「发现 4 个，处理 0 个」刷屏。实测某视频站在每页都触发这条路径，
+        日志被刷得看不出真正的问题。
+        ``notify`` 策略永远 handled==0，所以它也天然只跑一轮。
+        """
         try:
             self._max_rounds = max(1, int(max_rounds))
         except (TypeError, ValueError):
@@ -84,5 +91,10 @@ class PopupHandler(QObject):
         found, handled = self.handle()
         log_info(f"[popup] 第 {self._round} 轮：发现 {found} 个，处理 {handled} 个")
         if found == 0 or self._round >= self._max_rounds:
+            return
+        if handled == 0:
+            # 没有任何进展：再转下去也不会变，直接收工
+            log_info("[popup] 本轮未处理掉任何弹窗（多为一像素诱饵或已消失的节点），"
+                     "停止继续尝试")
             return
         QTimer.singleShot(300, self._next_round)

@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Media Fixture</title>
+<meta property="og:image" content="https://cdn.example.com/og/cover.png">
+<meta property="og:video" content="https://cdn.example.com/og/trailer.mp4">
+<meta property="og:audio" content="https://cdn.example.com/og/theme.mp3">
+<link rel="preload" as="image" href="https://cdn.example.com/pre/preload.jpg">
+<link rel="preload" as="video" href="https://cdn.example.com/pre/preload.mp4">
+<link rel="icon" href="/favicon.ico">
+<style>
+  .cssbg { background-image: url('/assets/cssbg.jpg'); }
+  .cssbg2 { background: #fff url("/assets/cssbg2.webp") no-repeat; }
+</style>
+</head>
+<body>
+  <h1>媒体全格式测试页</h1>
+
+  <!-- 1) 普通图片 -->
+  <img id="plain" src="/img/plain.jpg" alt="普通图" width="100" height="50">
+
+  <!-- 2) 懒加载：src 是占位图，真地址在 data-src -->
+  <img id="lazy" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" data-src="/img/lazy-real.png" alt="懒加载">
+
+  <!-- 3) 响应式：srcset 里挑最大的 -->
+  <img id="responsive" src="/img/fallback.jpg"
+       srcset="/img/s-320.webp 320w, /img/s-1280.webp 1280w" alt="响应式">
+
+  <!-- 4) picture / source -->
+  <picture>
+    <source srcset="/img/pic.avif" type="image/avif">
+    <source srcset="/img/pic.webp" type="image/webp">
+    <img id="pic-img" src="/img/pic.jpg" alt="picture">
+  </picture>
+
+  <!-- 5) 内联样式背景图 + CSS 规则背景图 -->
+  <div id="bginline" style="background-image: url('/img/inline-bg.gif'); width:10px;height:10px;"></div>
+  <div id="bgcss" class="cssbg" style="width:10px;height:10px;"></div>
+  <div id="bgcss2" class="cssbg2" style="width:10px;height:10px;"></div>
+
+  <!-- 6) SVG 内嵌位图 -->
+  <svg width="10" height="10"><image href="/img/svg-inline.png"></image></svg>
+
+  <!-- 7) 视频：src + source + poster -->
+  <video id="v1" src="/media/movie.mp4" poster="/img/poster.webp"
+         width="320" height="180" controls></video>
+  <video id="v2" poster="/img/poster2.jpg" controls>
+    <source src="/media/movie.webm" type="video/webm">
+    <source src="/media/movie.m4v" type="video/mp4">
+  </video>
+
+  <!-- 8) 独立 source（不在 video 里） -->
+  <source type="video/mp4" src="/media/standalone.mp4">
+
+  <!-- 9) 音频：src + source -->
+  <audio id="a1" src="/audio/song.mp3" controls></audio>
+  <audio id="a2" controls>
+    <source src="/audio/song.ogg" type="audio/ogg">
+    <source src="/audio/song.flac" type="audio/flac">
+  </audio>
+
+  <!-- 10) 视频平台 iframe -->
+  <iframe src="https://player.bilibili.com/player.html?bvid=BV1xx411c7mD" width="200" height="100"></iframe>
+  <iframe src="https://example.com/frame.html" width="10" height="10"></iframe>
+
+  <!-- 12) 站点自己的 UI 素材：应被标记 asset=1（可一键过滤掉） -->
+  <img id="asset-icon" src="/static-resource/icon_home.png" alt="站点图标">
+  <img id="asset-emoji" src="/emoji/smile_01.png" alt="表情">
+  <img id="asset-avatar" src="/avatar/user_default.png" alt="头像">
+
+  <!-- 13) 百分号编码的内嵌 JSON（抖音 RENDER_DATA 那类：整段 encodeURIComponent）。
+       正文图地址没有常规扩展名，只能靠 biz_tag / tos-cn-i- 这类标记认出来 ——
+       这一条专门守住"只认扩展名就会大面积漏抓、只剩站点素材图"这个缺陷。 -->
+  <script id="RENDER_DATA_ENC" type="application/json">
+    %7B%22note%22%3A%7B%22images%22%3A%5B%7B%22url_list%22%3A%5B%22https%3A%2F%2Fp3-pc-sign.douyinpic.com%2Ftos-cn-i-0813%2Fabc123.image%3Fbiz_tag%3Daweme_images%26x-expires%3D123%22%5D%7D%5D%2C%22music%22%3A%7B%22play_url%22%3A%22https%3A%2F%2Fcdn.example.com%2Fa%2Fenc-song.mp3%22%7D%7D%7D
+  </script>
+
+  <!-- 11) 内嵌 JSON：转义斜杠 + HLS 清单（抖音/快手那类写法） -->
+  <script id="RENDER_DATA" type="application/json">
+    {"note":{"video":{"play_addr":"https:\/\/cdn.example.com\/v\/real-video.mp4",
+    "hls":"https://cdn.example.com/v/stream/master.m3u8",
+    "dash":"https://cdn.example.com/v/stream/manifest.mpd"},
+    "music":{"play_url":"https:\/\/cdn.example.com\/a\/bgm.m4a"},
+    "cover":"https:\/\/cdn.example.com\/img\/json-cover.jpeg"}}
+  </script>
+  <script>
+    window.__INITIAL_STATE__ = {"audio":"https://cdn.example.com/a/inline-song.mp3"};
+  </script>
+</body>
+</html>

@@ -9,6 +9,7 @@
 """
 
 import os
+import time
 
 from PySide6.QtCore import QEventLoop, QObject, QTimer, Signal
 from PySide6.QtNetwork import QNetworkCookie
@@ -16,6 +17,21 @@ from PySide6.QtNetwork import QNetworkCookie
 from config.constants import PROFILE_DIR
 from utils.exporters import export_cookies, import_cookies
 from utils.logger import log_info, log_warn
+
+#: 「清空全部 Cookie」之后的静默窗口（秒）。
+#:
+#: 为什么需要它：``setCookie()`` 是**同步写库、异步发信号**的
+#: （``cookieAdded`` 要排队到之后的事件循环里送达）。于是「切换 Profile 载入
+#: 一批 cookie」紧接着「用户点清空」时，清空之后那些**排队的 cookieAdded 才送达**，
+#: 缓存被重新填满 —— 界面上表现为「点了清空，cookie 又自己回来了」，
+#: 而且此时缓存与真实 store 已经不一致。
+#: （测试里就是这么暴露的：清空后断言为空，结果又冒出 34 条真实站点的 cookie。）
+#:
+#: 取值 1.5 秒：一批 cookie 的信号送达在无头/单进程环境下实测可以拖到
+#: 半秒以上，0.6 秒会漏。窗口内到达的添加会被忽略并回删 ——
+#: 这与「我刚点了清空」的语义一致；代价是紧接着的 1.5 秒内页面新设的
+#: cookie 也会被丢掉，可以接受（用户想保留就不会点清空）。
+_CLEAR_GRACE_S = 1.5
 
 
 def _qba_to_str(value) -> str:
@@ -40,6 +56,8 @@ class CookieManager(QObject):
         self._cookies = {}    # (name, domain, path) -> dict
         self._loaded = False
         self._profile_name = "default"
+        #: 最近一次「清空全部」的时刻（见 _CLEAR_GRACE_S）
+        self._cleared_at = 0.0
 
         self.store.cookieAdded.connect(lambda *a: self._on_cookie_added(a[0]))
         self.store.cookieRemoved.connect(lambda *a: self._on_cookie_removed(a[0]))
@@ -86,6 +104,13 @@ class CookieManager(QObject):
 
     def _on_cookie_added(self, cookie) -> None:
         try:
+            if self._clearing_now():
+                # 清空之后迟到的添加：多为清空前排队的事件，别让它复活
+                try:
+                    self.store.deleteCookie(cookie)
+                except Exception:
+                    pass
+                return
             key = self._key(cookie)
             self._raw[key] = QNetworkCookie(cookie)   # 拷贝，保持对象稳定
             self._cookies[key] = self._to_dict(cookie)
@@ -93,6 +118,10 @@ class CookieManager(QObject):
             self._schedule_persist()
         except RuntimeError:
             pass   # 关闭阶段对象已销毁，忽略
+
+    def _clearing_now(self) -> bool:
+        """是否处于「清空之后」的静默窗口内。"""
+        return (time.monotonic() - self._cleared_at) < _CLEAR_GRACE_S
 
     def _on_cookie_removed(self, cookie) -> None:
         try:
@@ -163,11 +192,39 @@ class CookieManager(QObject):
         return True
 
     def clear_all(self) -> None:
+        """清空当前 Profile 的全部 Cookie。
+
+        ``deleteAllCookies()`` 只保证**当下**清空；清空前排队的 ``cookieAdded``
+        仍会在随后的事件循环里送达（见模块顶部 ``_CLEAR_GRACE_S`` 的说明）。
+        所以这里先打上时间戳（窗口内到达的添加一律忽略并回删），
+        再在窗口结束时补一次清空，保证最终状态确实是「空」。
+        """
+        self._cleared_at = time.monotonic()
         self.store.deleteAllCookies()
         self._raw.clear()
         self._cookies.clear()
         self.cookies_changed.emit(self.list_cookies())
         self._schedule_persist()
+        # 窗口结束再兜一次：迟到的 cookieAdded 即使被忽略，store 里也可能残留
+        QTimer.singleShot(int(_CLEAR_GRACE_S * 1000) + 50, self._settle_after_clear)
+
+    def _settle_after_clear(self) -> None:
+        """静默窗口结束后的收尾：确认缓存/库都干净，并再通知一次界面。
+
+        注意 ``store`` 是 ``QWebEngineCookieStore``，**没有**枚举接口
+        （既没有 ``allCookies()`` 也不支持遍历），所以这里只能再删一次；
+        该调用幂等且开销极小。
+        """
+        try:
+            self.store.deleteAllCookies()
+        except Exception:
+            pass
+        self._raw.clear()
+        self._cookies.clear()
+        try:
+            self.cookies_changed.emit(self.list_cookies())
+        except RuntimeError:
+            pass
 
     # --------------------------------------------------------------
     # Profile=cookie 集持久化 / 切换

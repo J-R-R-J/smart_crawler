@@ -143,6 +143,209 @@
 - 文档更正：`scrapling[fetchers]` **不会**安装 camoufox，`scrapling install`
   下载的也是 chromium；浏览器**不随 pip 下发**，pip 只装 Python 包。
 
+### 界面：安装指引搬进程序里（补记）
+
+免安装版 zip 里**没有 README**（只有 exe 与 `_internal`），而补装 Scrapling
+与浏览器又必须照着文档做。所以把指引从「只在文档里」改成「界面里能直接点开」：
+
+- **左侧「② 抓取引擎」下新增「复制安装命令」按钮**：提示里那条
+  `pip --target ...` / `scrapling.exe install` 命令又长又带引号，手打必错。
+  按钮复制的内容随三态变化（包没装 → pip 命令；包装好缺浏览器 → 两条路线；
+  都齐了 → 置灰显示「无需安装」），复制后按钮短暂变成「已复制」。
+- **左上角新增「设置」按钮 → 设置对话框**（`ui/settings_dialog.py`）：
+  当前状态（包版本 / 浏览器目录 / 隐身动态引擎是否可用）、
+  哪个引擎需要什么的对照表、路线 1（解压浏览器增强包，含目标目录树）、
+  路线 2（联网下载的完整命令）、以及 6 条实测踩过的坑；
+  底部三个动作：打开浏览器目录 / 打开外挂依赖目录 / 复制安装命令。
+  关掉对话框会顺手刷新左侧提示 —— 用户可能刚把浏览器解压进去，不必重启程序。
+- **新增用户文档《浏览器增强包安装指南.md》**：把实际装机过程（pip 选项位置、
+  EPERM 与杀软、镜像超时、手动下载压缩包、目录不能多套一层、
+  headless shell 的正确目录名、`PYTHONPATH`、`INSTALLATION_COMPLETE`、
+  `ffmpeg` / `winldd` 不能删）整理成可照做的步骤 + 验证清单 + 常见坑。
+  它同时进入**源码包根目录**与**免安装版的 exe 同级**。
+- `ui/top_bar.py` 新增 `settings_clicked` 信号；`ui/main_window.py` 新增
+  `_on_settings()`。
+- 对话框与提示里的路径/命令**全部从 `core.scrapling_engine` 取**
+  （`site_packages_dir()` / `browser_drop_dirs()` / `site_packages_hint()` /
+  `install_hint()`），不在 UI 里另写一份 —— 这类「文档路径与代码不一致」
+  在本项目已经出过好几次。
+- 测试：`test_scrapling` 129 → **157** 项（新增安装指引的界面契约与
+  用户指南关键字断言，任一处漂移即失败）。
+
+### 文档：徽章与版本口径
+
+- README 徽章改为 **Windows** + **Python 3.13**（原先写 3.10+ 与
+  Windows/Linux/macOS，与免安装版内置 3.13 运行时的实际约束对不上）。
+- 「环境要求」改成两栏表：免安装版（Windows 64 位 / 内置 3.13）与
+  源码运行（Windows/Linux/macOS / 3.10+），并解释 3.13 是**免安装版外挂依赖的
+  ABI 约束**，不是 Scrapling 的门槛（它要求 >=3.10）。
+
+### 媒体全格式：图片 / 视频 / 音频（补记）
+
+- **抓取格式 18 → 20**：新增 `audio`（音频地址）与 `media`（一次抓齐图+视+音，
+  用 `kind` 列区分），`images` / `video` 重写为全格式采集。
+- 只看 `<img src>` 会大面积漏抓，实测四路并行才够：
+  **懒加载属性**（24 个常见 `data-*`）、**srcset / `<picture>`**（按 `w`/`x`
+  取最大候选，浏览器实际选中的记在 `current` 列）、**背景图**（内联 style +
+  `data-bg*` + 文档 CSSOM 规则）、**原始文本扫描**（内嵌 JSON 里的直链，
+  先还原 `\/` 与 `\u002F` 转义 —— 抖音/快手/小红书都是这个写法）。
+- 视频补齐 `poster` / HLS(`m3u8`) / DASH(`mpd`) / `og:video` /
+  `<link rel=preload as=video>` / 视频平台 iframe；音频补齐 `og:audio` 与
+  内嵌 JSON 直链。`blob:` 地址照样收录，但标注 `downloadable: false`。
+- 扩展名清单集中到 `config/default_settings.py`
+  （`IMAGE_EXTS` / `VIDEO_EXTS` / `AUDIO_EXTS`，共 66 个），
+  **提取脚本与下载白名单共用同一份**，加新格式不会只生效一半。
+- 左侧「下载格式」改为**预设下拉**（不限 / 仅媒体 / 仅图片 / 仅视频 /
+  仅音频 / 图+视 / 文档 / 压缩包），选中即展开完整扩展名；手改后自动切「自定义」。
+- 新增测试页 `tests/testdata/media.html`，98 项功能断言里有 27 项专门盯媒体
+  全格式（含「srcset 取最大」「内嵌 JSON 转义直链」「CSSOM 背景图」等）。
+
+### 反检测强化：六项（补记）
+
+左侧新增总开关，左上角「设置」窗口第一组可逐项配置，改动立即生效并写入偏好。
+
+- **抗广告/追踪器干扰**（`core/antibot.py`）：网络层按后缀匹配拦截第三方埋点，
+  主文档 / 第一方 / 风控校验域名**永不拦截**；JS 侧填平 `canRunAds` /
+  `adsbygoogle` 等反广告探测变量、恢复诱饵元素、拆掉全屏「请关闭广告拦截」遮罩。
+  **只拦追踪器，不拦可见广告素材**（默认关）—— 拦掉广告位等于向站点自报装了拦截器。
+- **自动生成真实请求头**（`core/headers.py`）：按请求类型给出 `Accept` /
+  `Sec-Fetch-Dest|Mode|Site` / `sec-ch-ua*` / `Accept-Language`。
+  浏览器引擎通过 `QWebEngineUrlRequestInterceptor` 补齐（QtWebEngine
+  **不实现 Client Hints**，这本身就是可检测特征）；HTTP 引擎发整套头，
+  且 Referer 与 `Sec-Fetch-Site` 保持一致。
+- **TLS 指纹伪装**：`impersonate` 档位**动态挑选**（问 curl_cffi 有哪些档位，
+  取与 UA 版本最接近的），不写死 —— 写死换台机器就 `ImpersonateError`。
+- **Canvas 指纹干扰**：`toDataURL` / `toBlob` / `getImageData` / WebGL
+  `readPixels` 加**确定性**噪声（种子固定，且只改返回给页面的副本、不写回画布），
+  于是同一画布反复读取结果一致 —— 噪声不确定比不伪装更容易被识别。
+- **WebRTC 泄露防护**：强制 `iceTransportPolicy=relay` + 过滤含私有 IP 的候选
+  （`.local` mDNS 不拦，那本来就是隐私保护形式），并加 Chromium 启动参数
+  `--force-webrtc-ip-handling-policy=default_public_interface_only`。
+- **Cloudflare 自动绕过**：区分「非交互 JS 挑战」（自动换隐身引擎重试一次）与
+  「交互式 Turnstile / WAF 拦截」（提示人工），不再一律停下来等人。
+- 两个引擎的地区身份统一：`locale=zh-CN` + `timezone_id=Asia/Shanghai`，
+  避免「中文环境 + UTC 时区」这种典型自动化组合。
+
+### 修复（本批实测发现）
+
+- **验证码误判拦停任务**：日志里「命中的是关键词、根本没检测到验证组件」却把任务
+  停下等人。根因是关键词搜索范围包含**整份 HTML** —— 某视频站 1.5 MB 的 HTML 里
+  某个脚本字符串含 `captcha`，页面本身毫无验证码。现在**拿到足够长的渲染文本时
+  只搜可见范围**（标题 + innerText + URL），只在源码里命中的只记一条日志；
+  渲染文本过短（挑战页常常很短）时仍走宽松判定，宁拦不漏。
+- **启动即崩溃的隐患**（本批自造自修）：`core/headers` 原先用
+  `QWebEngineProfile.defaultProfile()` 反查 Chromium 版本，而那会**创建默认
+  Profile**；单进程渲染模式下第二个 Profile 会被拒绝并直接 abort
+  （日志停在 `Single mode supports only single profile.`）。改为由
+  `core.browser` 建好 Profile 后读它自己的 `httpUserAgent()` 再回填版本号。
+- **UA 与 Client Hints 版本不一致**：原先 UA 写死 `Chrome/124.0.0.0`，
+  而 QtWebEngine 6.9.3 内嵌 Chromium 130 —— 站点把两个值一比就能看出 UA 是假的。
+  现在版本号从运行中的引擎反查，并加了 `consistency_issues()` 自检守卫。
+- **`--single-process` 在桌面上造成一串副作用**（用户日志可见）：
+  `Cannot use V8 Proxy resolver in single process mode`（**代理设置直接失效**）、
+  Service Worker `InvalidStateError`、`message timeout [init]`。
+  现在只在无头平台（`QT_QPA_PLATFORM=offscreen`）或显式设置
+  `SMARTCRAWLER_SINGLE_PROCESS=1` 时才加该参数。
+- **Scrapling 的 `No Cloudflare challenge found.` 是 ERROR 级日志**：
+  正常页面（没有 CF 挑战）每抓一次就打一条刺眼的 ERROR，实为正常情况。
+  现在挂过滤器丢弃它，改用自己的 INFO 记一次。
+- **弹窗处理空转**：某站每页都出现「发现 4 个，处理 0 个」并连转 3 轮
+  （白等 600ms、日志被刷）。现在发现但一个也没处理掉时立即停止后续轮次。
+
+### 导出：11 种格式 + 爬取文件导出（补记）
+
+- **数据导出从 2 种扩展到 11 种**：CSV / TSV / JSON / JSON Lines / **Excel(xlsx)** /
+  Markdown / HTML / 纯文本 / XML / YAML / **SQLite**。全部用标准库实现，
+  零第三方依赖（xlsx 不是靠 openpyxl，而是按 OOXML 最小子集手写：字符串用
+  `inlineStr`，冻结首行 + 自动筛选；`sqlite3` / `zipfile` / `unicodedata` 都是内置）。
+  打包体积不变，用户机器也不用额外装东西。
+- **界面新增「导出为…」菜单**（原 CSV / JSON 快捷按钮保留），底部新增 **「导出文件…」**。
+- **数据区右键菜单**：复制单元格 / 整行 / 整列 / 为 JSON；**导出此条数据…**（11 种格式）；
+  快速导出为 JSON（不弹窗）；**导出此条的文件…**；单个文件时「该文件另存为…」；
+  打开该文件、在资源管理器中定位、在浏览器打开原始链接、删除此条。
+  选中多行时菜单自动切换为批量版本。
+- **爬取文件导出（`utils/media_files.py`）**：三条来源 —— 本地已下载的**直接复制**
+  （不重复耗流量、不怕链接过期）、缺失的**联网下载**（带浏览器同款请求头）、
+  内联 `data:` URL **base64 解码**。落盘先写 `.part` 再改名，失败不留半成品；
+  无扩展名时按响应 `Content-Type` 补；同名自动加 `-1` 后缀不覆盖。
+  `blob:` / `about:` 这类页面内地址明确标为「已跳过 + 原因」，不静默丢文件。
+- **导出在独立线程跑**（`ui/media_export.py`）：进度条 + 停止按钮，
+  结束后逐项列出「已复制 / 已下载 / 已存在 / 已跳过 / 失败」与失败原因。
+- 普通网页链接（无文件扩展名、列名也不含媒体信息）**不再算作"文件"**，
+  否则每条记录都会显示「有 1 个文件」—— 这类链接由「在浏览器中打开链接」负责。
+- 单条导出的 JSON / YAML 写成**对象**而不是单元素数组；TXT 单条导出改成
+  「字段：值」清单（表格模式下中文按双宽对齐，多行值压平以免冲垮对齐）。
+- 修：SQLite 列类型推断把「整数 + 小数」的混合数字列判成了 TEXT
+  （应判 REAL），排序/比较会因此失真。
+- 修：`CREATE INDEX ... (rowid)` 在 SQLite 里不合法（`rowid` 是隐式列），
+  导出数据库会直接报 `no such column: rowid`；改为给第一列建索引。
+- 修：`core/extractor.supported_modes()` 的文档字符串还写着「18 个 key」（实为 20）。
+
+### 安装指引与引擎文件位置（补记）
+
+- **安装指引重写（界面「设置」窗口 + 《浏览器增强包安装指南.md》同步）**：
+  - 解压后的**目录树一个条目一行**（原来把两三个目录挤在一行，用户反馈看不清），
+    并逐项标出**必需 / 可选**；判据写明「两个 `.exe` 都在 → 引擎就绪」。
+  - 新增**路线 3：国内镜像手动下载（npmmirror）**。官方 CDN 在国内常常只有
+    几十 KB/s，镜像上有同一份文件；指引给出镜像页面与直链、目录名要求，
+    以及**两个空标记文件**（`INSTALLATION_COMPLETE` / `DEPENDENCIES_VALIDATED`）
+    与 `winldd-*` 的作用 —— 缺标记文件时 playwright 会把手动装的当成「没安装」
+    重新下载。（另附一条实话：`PLAYWRIGHT_DOWNLOAD_HOST` 指向镜像**没用**，
+    playwright 1.58 起 Chromium 的下载路径 `builds/cft/…` 是硬编码的，只换域名会 404。）
+  - 写清**联网下载的默认落点**是 `%LOCALAPPDATA%\ms-playwright`（不是程序目录），
+    并给出查看命令 `python -m playwright install --dry-run`（会打印
+    `Install location` 与 `Download url`，版本号就从这里看）。
+  - 「⑥ 已知坑」改名为 **「⑧ 注意事项」**，并补了标记文件、目录优先级、
+    换目录后要刷新状态等条目。
+- **引擎文件位置可自定义**（`core/scrapling_engine.set_custom_paths` +
+  设置窗口「④ 引擎文件位置」+ 偏好 `site_packages_path` / `browsers_path`）：
+  外挂依赖目录与浏览器目录都能指到别的盘，**改完立即生效**（换目录时会撤掉旧的
+  `sys.path` 条目并重置惰性加载状态，否则会出现「界面改了目录、程序还从旧目录导入」）。
+  这样 playwright 下到用户目录时**不用搬几百 MB 的文件**，指一下即可。
+  优先级明确：**环境变量 `PLAYWRIGHT_BROWSERS_PATH` > 界面自定义 > 自动探测**
+  （沿用既有不变式「不覆盖用户设过的环境变量」，界面会提示当前是谁在生效）。
+- 指引里的**版本号与镜像地址改为动态生成**：从已安装的 playwright / patchright 的
+  `browsers.json` 读 revision 与 browserVersion（读不到才退回内置常量），
+  避免「换了依赖版本，文档里的路径就照做不通」。
+- 修：**清空全部 Cookie 后 cookie 会「复活」**。`setCookie()` 是同步写库、
+  异步发信号，清空前排队的 `cookieAdded` 会在清空之后送达，把缓存重新填满 ——
+  切换 Profile 紧接着点清空就能复现（界面上就是「清了又回来」）。
+  现在清空后有 1.5 秒静默窗口：窗口内到达的添加一律忽略并回删，窗口结束再兜一次。
+  （这是打包前跑测试时暴露的：断言「清空后为空」却冒出 34 条真实站点的 cookie。）
+
+### 内容平台的图片识别与素材图过滤（补记）
+
+用户实测反馈：在抖音「爬不到目标图片，只能抓到网站的素材图」。定位到两个问题，
+一个在识别规则里，一个在结果筛选上：
+
+- **正文图没有常规扩展名，只看扩展名必然失手**。抖音正文图是
+  `…/tos-cn-i-0813/xxx.image?biz_tag=aweme_images&x-expires=…` 这种形态，
+  数据还常常整段塞在 `encodeURIComponent` 过的 `RENDER_DATA` 里
+  （`https%3A%2F%2F…%3Fbiz_tag%3Daweme_images`）。现在**按 URL 标记判定内容图**
+  （`biz_tag=aweme_images` / `biz_tag=pcweb_cover` / `tos-cn-i-0813` /
+  `~tplv-dy-aweme-images` / `~tplv-*image` / `.image` 结尾），视频同理认
+  `biz_tag=aweme_video` / `douyinvod` / `.m3u8`；扩展名判定仍照旧生效，两者取并集。
+- **百分号编码还原补全**（这是本轮真正的 bug）：原先只还原 `%3A %2F %3F %3D %26`
+  这类 URL 分隔符，**没有还原 `%22`（引号）/ `%20`（空格）/ `%5C`**。于是整段
+  编码 JSON 里，地址会一直粘到下一个引号，尾部长出 `%22%2C%22` 之类垃圾 ——
+  `.mp3` / `.mp4` 这种**靠扩展名判定**的一条都认不出来，而 `tos-cn-i-0813`
+  这种**按子串匹配**的反而能过；现象就是「图片抓到了、编码段里的音视频拿不到」。
+  现在补全了引号 / 空格 / 括号 / 花括号等分隔符的还原，地址在正确的位置截断。
+- **新增 `asset` 列与「过滤站点素材图」开关**：页面自己的图标 / 表情 / 头像
+  （URL 命中 `/static-resource/`、`/emoji/`、`/avatar`、`sprite`、`logo` 等特征）
+  标记 `asset=1`；左侧 **运行设置** 新增「过滤站点素材图（图标 / 表情 / 头像）」
+  复选框（**默认关闭**，不影响其他站点），勾上后由
+  `core/extractor.py::_filter_assets()` 丢弃，日志打印「已过滤 N 条站点素材图」。
+  不默认开是因为「哪些算素材」带主观性：默认给全量，把选择权交给用户。
+- **修：页面脚本自行跳转会中断注入页面的加载**。部分站点在脚本里立刻
+  `location.replace`，导致灌入 HTML 后 `loadFinished(false)`，任务被判为加载失败
+  直接结束。现在注入后 30 秒内出现该情况会记一条
+  「注入页面的加载被页面脚本中断（多为站点自行跳转），继续按已取回的 HTML 提取」
+  并继续走等待与提取流程；30 秒之后的加载失败仍按真失败处理。
+- 测试页 `tests/testdata/media.html` 增加站点素材图与一段百分号编码的
+  `RENDER_DATA`（含 `.image?biz_tag=aweme_images` 与 `.mp3`），
+  `test_feature` 相应增加 9 项断言（含「编码段里的音频要认出来」这条本轮 bug 的回归）。
+
 ---
 
 ## [0.0.3] - 2026-09-20

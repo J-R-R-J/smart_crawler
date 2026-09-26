@@ -23,6 +23,7 @@ class Task:
     engine: str = "browser"          # browser / http / stealth / dynamic
     adaptive: bool = False           # 用 Scrapling 自适应选择器提取（网站改版自愈）
     engine_timeout: float = 30.0     # 非浏览器引擎的单页超时（秒）
+    filter_site_assets: bool = False  # 过滤站点 UI 素材（图标/表情/头像/皮肤图）
 
     def __post_init__(self):
         """保持 mode 与 modes 一致：以 modes 为准。"""

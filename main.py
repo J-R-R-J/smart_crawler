@@ -49,13 +49,17 @@ _SELFTEST_MODULES = (
     "config.constants", "config.default_settings", "config.js_scripts",
     "config.keyword_store", "config.welcome",
     "models.field", "models.task", "models.record",
-    "core.signals", "core.user_prefs", "core.browser", "core.cookie_manager",
+    "core.signals", "core.user_prefs", "core.headers", "core.antibot",
+    "core.browser", "core.cookie_manager",
     "core.detector", "core.extractor", "core.picker", "core.pager",
     "core.popup_handler", "core.scrapling_engine", "core.crawler",
-    "utils.logger", "utils.exporters", "utils.js_runner", "utils.maintenance",
+    "utils.logger", "utils.exporters", "utils.media_files",
+    "utils.js_runner", "utils.maintenance",
     "utils.console", "utils.appicon",
     "ui.top_bar", "ui.banner", "ui.left_panel", "ui.center_panel",
-    "ui.right_panel", "ui.cookie_panel", "ui.keyword_dialog", "ui.main_window",
+    "ui.right_panel", "ui.media_export", "ui.cookie_panel",
+    "ui.keyword_dialog",
+    "ui.settings_dialog", "ui.main_window",
 )
 
 
@@ -185,6 +189,57 @@ def _apply_window_icon(app) -> None:
         log_warn(f"[ui] 窗口图标设置失败：{e}")
 
 
+def _chromium_flags() -> str:
+    """按运行环境拼出 QtWebEngine 的 Chromium 启动开关。
+
+    为什么不再是固定一串（实测踩过的坑）
+    ------------------------------------
+    原先是固定 ``--no-sandbox --disable-gpu --single-process
+    --disable-gpu-driver-bug-workarounds
+    --disable-blink-features=AutomationControlled``。其中
+    ``--single-process`` 是**为无 GPU 的沙箱 / CI 环境**加的，但在正常
+    桌面上会带来一串副作用，用户在日志里就能看到：
+
+      · ``Cannot use V8 Proxy resolver in single process mode.``
+        —— 代理设置在单进程下根本不生效（爬虫最需要代理的时候失效）；
+      · ``Failed to get a ServiceWorkerRegistration: The document is in an
+        invalid state.`` 与 ``message timeout [init]``
+        —— Service Worker / 子进程 IPC 在单进程下残缺，页面初始化报错；
+      · 单进程下只允许一个 Profile，任何第二个 Profile 都会直接 abort。
+
+    所以现在**只在确实需要它的场合**才加：无头平台（offscreen）或用户
+    显式设置 ``SMARTCRAWLER_SINGLE_PROCESS=1``。桌面运行改回多进程，
+    上面那些错误随之消失。
+
+    WebRTC 泄露防护（``--force-webrtc-ip-handling-policy``）：
+    强制只使用「默认公共接口」，不暴露本机 / 内网地址；配合
+    core.js_scripts 里的 RTCPeerConnection 包装与 mDNS 混淆，
+    三层里任何一层生效都不会泄露真实 IP。
+
+    用户仍可用环境变量 ``QTWEBENGINE_CHROMIUM_FLAGS`` 整体覆盖。
+    """
+    flags = [
+        "--no-sandbox",
+        "--disable-gpu",
+        "--disable-gpu-driver-bug-workarounds",
+        # 从源头不设置 navigator.webdriver，比事后用 JS 覆盖更彻底
+        "--disable-blink-features=AutomationControlled",
+        # WebRTC：只走公共接口，不暴露内网/本机地址
+        "--force-webrtc-ip-handling-policy=default_public_interface_only",
+        # 保留 mDNS 混淆（Chrome 默认行为，显式写出来防止被上面的策略覆盖）
+        "--enable-features=WebRtcHideLocalIpsWithMdns",
+        # 关掉「自动化/测试」相关的特性暴露面
+        "--disable-features=Translate,OptimizationHints,CalculateNativeWinOcclusion",
+    ]
+    headless = os.environ.get("QT_QPA_PLATFORM", "").strip().lower() in (
+        "offscreen", "minimal", "vnc")
+    forced = os.environ.get("SMARTCRAWLER_SINGLE_PROCESS", "").strip() in (
+        "1", "true", "yes", "on")
+    if headless or forced:
+        flags.append("--single-process")
+    return " ".join(flags)
+
+
 def main():
     # ---- 命令行开关（不启动界面，便于验证安装/打包完整性）----
     argv = [a.lower() for a in sys.argv[1:]]
@@ -198,14 +253,7 @@ def main():
     # ---- 环境准备 ----
     # 单进程渲染 + 软渲染：在受限/无 GPU 环境（沙箱、CI、容器、远程桌面）下
     # 也能稳定加载页面；普通桌面用户可用环境变量覆盖。
-    #
-    # --disable-blink-features=AutomationControlled 让 Chromium 从源头不设置
-    # navigator.webdriver，比事后用 JS 覆盖更彻底（不留 own property 痕迹）。
-    os.environ.setdefault(
-        "QTWEBENGINE_CHROMIUM_FLAGS",
-        "--no-sandbox --disable-gpu --single-process "
-        "--disable-gpu-driver-bug-workarounds "
-        "--disable-blink-features=AutomationControlled")
+    os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", _chromium_flags())
 
     # ---- Qt 相关 ----
     from PySide6.QtCore import Qt, QCoreApplication

@@ -191,7 +191,7 @@ def main():
 
     # 全选 / 清空选择
     lp.btn_check_all.click()
-    check("check all formats", len(lp.selected_modes()) == 18,
+    check("check all formats", len(lp.selected_modes()) == 20,
           str(len(lp.selected_modes())))
     lp.btn_check_none.click()
     check("clear format selection", lp.selected_modes() == [])
@@ -211,11 +211,61 @@ def main():
           win.browser.allowed_download_exts == {"pdf", "csv"}
           and win.prefs.download_exts == "pdf,csv",
           f"{sorted(win.browser.allowed_download_exts)} / {win.prefs.download_exts!r}")
+    check("手改扩展名后预设自动切到「自定义」",
+          lp.download_preset() == "custom", lp.download_preset())
     lp.stealth_chk.setChecked(True)
     lp.download_spin.setValue(50)
     win._on_run_settings()
     check("run settings restored",
           win.browser.stealth_enabled is True and win.browser.max_download_mb == 50)
+
+    # ---- 下载格式预设 ----
+    lp.set_download_preset("image")
+    img_exts = lp.download_exts()
+    check("选「仅图片」后扩展名列表被展开",
+          "jpg" in img_exts and "png" in img_exts and "mp4" not in img_exts,
+          img_exts[:60])
+    lp.set_download_preset("video")
+    check("选「仅视频」时含流媒体清单 m3u8",
+          "m3u8" in lp.download_exts() and "jpg" not in lp.download_exts(),
+          lp.download_exts()[:60])
+    lp.set_download_preset("media")
+    media_exts = lp.download_exts()
+    check("选「仅媒体」时三类都在",
+          all(e in media_exts for e in ("jpg", "mp4", "mp3", "m3u8")),
+          str(len(media_exts.split(","))))
+    lp.set_download_preset("all")
+    check("选「不限格式」时空串（=允许全部）", lp.download_exts() == "",
+          repr(lp.download_exts()))
+    # 预设会写进偏好，重开面板能恢复
+    lp.set_download_preset("audio")
+    lp.collect_task()
+    check("下载预设已持久化", win.prefs.download_preset == "audio",
+          win.prefs.download_preset)
+    lp.set_download_preset("all")
+
+    # ---- 反检测强化总开关 ----
+    check("左面板有反检测总开关且默认开", lp.antibot_enabled() is True)
+    lp.antibot_chk.setChecked(False)
+    win._on_run_settings()
+    check("关掉总开关后六项全部失效",
+          win.browser.block_trackers is False
+          and win.browser.auto_headers is False
+          and win.browser.hide_canvas is False
+          and win.browser.block_webrtc is False
+          and win.crawler.auto_cloudflare is False,
+          str(win._antibot_flags()))
+    from core import scrapling_engine as _se
+    check("总开关也会同步到 Scrapling 层（TLS / 请求头）",
+          _se.runtime_options() == {"auto_headers": False, "tls_spoof": False},
+          str(_se.runtime_options()))
+    lp.antibot_chk.setChecked(True)
+    win._on_run_settings()
+    check("重新打开总开关后恢复（子项勾选状态没有被抹掉）",
+          win.browser.block_trackers is True
+          and win.browser.hide_canvas is True
+          and _se.runtime_options() == {"auto_headers": True, "tls_spoof": True},
+          str(win._antibot_flags()))
 
     lp.set_running(True)
     check("set_running(True)", not lp.btn_start.isEnabled() and lp.btn_stop.isEnabled())
@@ -266,6 +316,128 @@ def main():
     rp.export("json")
     check("export json", os.path.isfile(save_paths["json"]), save_paths["json"])
     dialog["save"] = None
+
+    # ---------------- 多格式导出（11 种）----------------
+    from utils.exporters import EXPORT_FORMATS
+
+    fmt_paths = {}
+    for key, _label, ext in EXPORT_FORMATS:
+        p = os.path.join(ROOT, "crawler_data", "exports", f"_ui_fmt.{ext}")
+        fmt_paths[key] = p
+        rp.export_selected([0, 1], key, path=p)
+    check("11 种格式都能从界面导出",
+          len(fmt_paths) == 11
+          and all(os.path.getsize(p) > 20 for p in fmt_paths.values()),
+          ", ".join(sorted(os.path.basename(p) for p in fmt_paths.values())))
+    with open(fmt_paths["md"], encoding="utf-8") as fh:
+        check("导出的 Markdown 里含数据", "标题" in fh.read())
+    quick = rp.export_quick((0,), "jsonl")
+    check("快速导出（不弹窗）落到导出目录",
+          os.path.isfile(quick) and quick.endswith(".jsonl")
+          and open(quick, encoding="utf-8").read().strip().startswith("{"),
+          os.path.basename(quick))
+
+    # ---------------- 数据区右键菜单 ----------------
+    rp.append_rows([{"标题": "C", "链接": "https://e.com/c",
+                     "图片1": "https://cdn.x.com/a/p.jpg"},
+                    {"标题": "D", "内联图片": "data:image/png;base64,aGVsbG8="}])
+    check("append_rows 带媒体链接的行", rp.table.rowCount() == 4,
+          f"rows={rp.table.rowCount()}")
+
+    menu = rp._make_row_menu(0, 0)
+    texts = [a.text() for a in menu.actions()]
+    sub_actions = [a for a in menu.actions() if a.menu() is not None]
+    sub_texts = ([a.text() for a in sub_actions[0].menu().actions()]
+                 if sub_actions else [])
+    check("右键菜单：复制项齐全",
+          any("复制单元格" in t for t in texts)
+          and any("复制整行" in t for t in texts)
+          and any("复制整列" in t for t in texts)
+          and any("复制为 JSON" in t for t in texts), str(texts))
+    check("右键菜单：导出此条数据下 11 种格式",
+          len(sub_texts) == 11 and any("(*.xlsx)" in t for t in sub_texts),
+          str(sub_texts[:3]))
+    check("右键菜单：无媒体链接时「导出此条的文件」置灰",
+          any("导出此条的文件" in t and not a.isEnabled()
+              for a, t in zip(menu.actions(), texts)), str(texts))
+
+    menu2 = rp._make_row_menu(2, 0)
+    texts2 = [a.text() for a in menu2.actions()]
+    check("右键菜单：有媒体链接时出现「导出此条的文件（1 个）」",
+          any("导出此条的文件（1 个）" in t for t in texts2), str(texts2))
+    check("右键菜单：单个文件时出现「该文件另存为…」",
+          any("另存为" in t for t in texts2), str(texts2))
+    check("右键菜单：有链接时提供「在浏览器中打开链接」",
+          any("在浏览器中打开链接" in t for t in texts2), str(texts2))
+    check("右键菜单：删除此条", any("删除此行" in t for t in texts2), str(texts2))
+    rp.table.selectAll()
+    menu3 = rp._make_row_menu(0, 0)
+    texts3 = [a.text() for a in menu3.actions()]
+    check("右键菜单：多选时出现「导出选中行的 N 个文件…」",
+          any("导出选中行的" in t for t in texts3)
+          and any("删除选中的 4 行" in t for t in texts3), str(texts3))
+    rp.table.clearSelection()
+
+    check("单元格/整行/整列取文本",
+          rp._cell_text(0, 0) == "A"
+          and "A" in rp._row_text(0) and "A" in rp._column_text(0),
+          rp._row_text(0)[:40])
+    try:
+        rp._clipboard("ui clipboard")
+        copied = True
+    except Exception as e:                                # noqa: BLE001
+        copied = False
+        print("clipboard:", e, flush=True)
+    check("复制到剪贴板不抛异常", copied)
+
+    # ---------------- 导出此条的文件（内联 data: URL，不联网）----------------
+    import shutil as _shutil
+    file_dir = os.path.join(ROOT, "crawler_data", "exports", "_ui_files")
+    _shutil.rmtree(file_dir, ignore_errors=True)
+    os.makedirs(file_dir, exist_ok=True)
+
+    def wait_for(pred, ms=5000, step=100):
+        waited = 0
+        while waited < ms and not pred():
+            spin(step)
+            waited += step
+        return pred()
+
+    old_export_dir = rp.prefs.export_dir
+    dlg = rp.export_row_files(3, dest_dir=file_dir, modal=False)
+    ok = wait_for(lambda: dlg is not None and dlg.report is not None)
+    rep = (dlg.report or {}) if dlg else {}
+    import glob as _glob
+    inline_files = _glob.glob(os.path.join(file_dir, "inline_*.png"))
+    check("数据区导出此条的文件（本地解码，不联网）",
+          ok and rep.get("ok") == 1 and len(inline_files) == 1
+          and open(inline_files[0], "rb").read() == b"hello",
+          str(rep.get("items")))
+    check("文件导出对话框回填状态与摘要",
+          dlg is not None and dlg.table.item(0, 3).text() == "已下载"
+          and "成功 1" in dlg.detail.toPlainText(),
+          dlg.detail.toPlainText().splitlines()[1] if dlg else "")
+
+    dlg2 = rp.export_files_all(dest_dir=file_dir, modal=False,
+                               rows=[{"内联图片": "data:image/png;base64,aGVsbG8="}])
+    wait_for(lambda: dlg2 is not None and dlg2.report is not None)
+    check("底部「导出文件…」批量导出",
+          dlg2 is not None and (dlg2.report or {}).get("ok") == 1,
+          str((dlg2.report or {}).get("items")))
+
+    save_as = os.path.join(file_dir, "saveas.png")
+    dlg3 = rp.export_one_file(3, path=save_as, modal=False)
+    wait_for(lambda: dlg3 is not None and dlg3.report is not None)
+    check("「另存为」按确切路径落盘",
+          dlg3 is not None and os.path.isfile(save_as)
+          and (dlg3.report or {}).get("items", [{}])[0].get("path") == save_as,
+          str((dlg3.report or {}).get("items")))
+
+    rp.prefs.export_dir = old_export_dir
+    rp.remove_rows((3,))
+    check("删除此行后行数与提示同步", rp.table.rowCount() == 3,
+          f"rows={rp.table.rowCount()}")
+    rp.remove_rows((2,))
 
     rp.log("INFO", "ui test log line")
     check("panel log", "ui test log line" in rp.log_view.toPlainText())
@@ -356,6 +528,23 @@ def main():
     spin(500)
     check("clear all cookies via UI", cm.list_cookies() == [],
           str(cm.list_cookies()))
+
+    # 清空之后迟到的 cookieAdded（清空前排队的事件）不能把 cookie 复活 ——
+    # 这是实测踩到的竞态：切换 Profile 载入一批 cookie 紧接着点清空时，
+    # 排队的添加事件会在清空之后送达，界面上表现为「清了又回来」。
+    from PySide6.QtCore import QByteArray as _QBA
+    from PySide6.QtNetwork import QNetworkCookie as _QNC
+    late = _QNC()
+    late.setName(_QBA(b"late_ck"))
+    late.setValue(_QBA(b"x"))
+    late.setDomain(".example.com")
+    late.setPath("/")
+    cm.clear_all()                     # 明确地在静默窗口内送一次迟到事件
+    check("清空后进入静默窗口（清空前排队的添加会被拦住）",
+          cm._clearing_now() is True, str(cm._cleared_at))
+    cm._on_cookie_added(late)
+    check("清空后迟到的 cookieAdded 被忽略（不会复活）",
+          cm.list_cookies() == [], str(cm.list_cookies()))
 
     # ================= 6. 横幅（确认 / 跳过）与全局信号 =================
     banner = win.banner

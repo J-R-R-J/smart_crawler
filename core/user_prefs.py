@@ -15,8 +15,10 @@ from PySide6.QtCore import QSettings
 
 from config.constants import DATA_DIR
 from config.default_settings import (
-    DEFAULT_DOWNLOAD_EXTS, DEFAULT_MAX_DOWNLOAD_MB, DEFAULT_STEALTH_ENABLED,
-    DEFAULT_SHOW_CONSOLE,
+    DEFAULT_ANTIBOT_ENABLED, DEFAULT_AUTO_CLOUDFLARE, DEFAULT_AUTO_HEADERS,
+    DEFAULT_BLOCK_AD_CREATIVES, DEFAULT_BLOCK_TRACKERS, DEFAULT_BLOCK_WEBRTC,
+    DEFAULT_DOWNLOAD_EXTS, DEFAULT_HIDE_CANVAS, DEFAULT_MAX_DOWNLOAD_MB,
+    DEFAULT_STEALTH_ENABLED, DEFAULT_SHOW_CONSOLE, DEFAULT_TLS_SPOOF,
 )
 
 SETTINGS_PATH = os.path.join(DATA_DIR, "settings.ini")
@@ -29,6 +31,22 @@ class UserPrefs:
         os.makedirs(DATA_DIR, exist_ok=True)
         self._settings = QSettings(SETTINGS_PATH, QSettings.Format.IniFormat)
         self._warned = False
+
+    # ------------------------------------------------------------------
+    # 布尔偏好通用读写
+    #
+    # 反检测强化一下子多了 7 个开关，逐个写成「读+写」两个方法会有
+    # 150 行几乎一样的代码，而且以后加一项就要再抄一遍（抄漏一处就是
+    # 「界面勾了不生效」）。这里收成一个 helper，各项只声明键名与默认值。
+    # ------------------------------------------------------------------
+    def _bool(self, key: str, default: bool) -> bool:
+        v = self._settings.value(key, bool(default))
+        if isinstance(v, bool):
+            return v
+        return str(v).lower() in ("true", "1", "yes", "on")
+
+    def _set_bool(self, key: str, value) -> None:
+        self._set(key, bool(value))
 
     def sync(self) -> None:
         """立即把未落盘的设置写入存储。"""
@@ -291,3 +309,129 @@ class UserPrefs:
     @show_console.setter
     def show_console(self, value) -> None:
         self._set("show_console", bool(value))
+
+    # ==================================================================
+    # 反检测强化（7 个开关 + 一个总开关）
+    #
+    # 总开关的语义：关掉它 = 六项全部按「关」处理，用来排查
+    # 「抓不到内容是不是伪装导致的」。子项各自的取值仍然保留在配置里，
+    # 重新打开总开关就能回到原来的组合。
+    # ==================================================================
+    @property
+    def antibot_enabled(self) -> bool:
+        return self._bool("antibot_enabled", DEFAULT_ANTIBOT_ENABLED)
+
+    @antibot_enabled.setter
+    def antibot_enabled(self, value) -> None:
+        self._set_bool("antibot_enabled", value)
+
+    @property
+    def block_trackers(self) -> bool:
+        return self._bool("block_trackers", DEFAULT_BLOCK_TRACKERS)
+
+    @block_trackers.setter
+    def block_trackers(self, value) -> None:
+        self._set_bool("block_trackers", value)
+
+    @property
+    def block_ad_creatives(self) -> bool:
+        return self._bool("block_ad_creatives", DEFAULT_BLOCK_AD_CREATIVES)
+
+    @block_ad_creatives.setter
+    def block_ad_creatives(self, value) -> None:
+        self._set_bool("block_ad_creatives", value)
+
+    @property
+    def auto_headers(self) -> bool:
+        return self._bool("auto_headers", DEFAULT_AUTO_HEADERS)
+
+    @auto_headers.setter
+    def auto_headers(self, value) -> None:
+        self._set_bool("auto_headers", value)
+
+    @property
+    def tls_spoof(self) -> bool:
+        return self._bool("tls_spoof", DEFAULT_TLS_SPOOF)
+
+    @tls_spoof.setter
+    def tls_spoof(self, value) -> None:
+        self._set_bool("tls_spoof", value)
+
+    @property
+    def hide_canvas(self) -> bool:
+        return self._bool("hide_canvas", DEFAULT_HIDE_CANVAS)
+
+    @hide_canvas.setter
+    def hide_canvas(self, value) -> None:
+        self._set_bool("hide_canvas", value)
+
+    @property
+    def block_webrtc(self) -> bool:
+        return self._bool("block_webrtc", DEFAULT_BLOCK_WEBRTC)
+
+    @block_webrtc.setter
+    def block_webrtc(self, value) -> None:
+        self._set_bool("block_webrtc", value)
+
+    @property
+    def auto_cloudflare(self) -> bool:
+        return self._bool("auto_cloudflare", DEFAULT_AUTO_CLOUDFLARE)
+
+    @auto_cloudflare.setter
+    def auto_cloudflare(self, value) -> None:
+        self._set_bool("auto_cloudflare", value)
+
+    # ------------------------------------------------------------------
+    # filter_site_assets: bool = False
+    # 过滤站点 UI 素材图（图标/表情/头像/皮肤资源），只留正文图
+    # ------------------------------------------------------------------
+    @property
+    def filter_site_assets(self) -> bool:
+        return self._bool("filter_site_assets", False)
+
+    @filter_site_assets.setter
+    def filter_site_assets(self, value) -> None:
+        self._set_bool("filter_site_assets", value)
+
+    # ------------------------------------------------------------------
+    # download_preset: str  上次选的下载格式预设（all/media/image/...）
+    # ------------------------------------------------------------------
+    @property
+    def download_preset(self) -> str:
+        try:
+            return str(self._settings.value("download_preset", "all") or "all")
+        except Exception:
+            return "all"
+
+    @download_preset.setter
+    def download_preset(self, value) -> None:
+        self._set("download_preset", str(value or "all"))
+
+    # ==================================================================
+    # 引擎文件位置（空 = 用默认值）
+    #
+    # 为什么允许改：几百 MB 的 scrapling 包与浏览器未必想放在程序目录里；
+    # 而且联网下载的浏览器默认落在 %LOCALAPPDATA%\ms-playwright，
+    # 允许直接把程序指过去，比让用户搬文件靠谱得多。
+    # ==================================================================
+    @property
+    def site_packages_path(self) -> str:
+        try:
+            return str(self._settings.value("site_packages_path", "") or "")
+        except Exception:
+            return ""
+
+    @site_packages_path.setter
+    def site_packages_path(self, value) -> None:
+        self._set("site_packages_path", str(value or ""))
+
+    @property
+    def browsers_path(self) -> str:
+        try:
+            return str(self._settings.value("browsers_path", "") or "")
+        except Exception:
+            return ""
+
+    @browsers_path.setter
+    def browsers_path(self, value) -> None:
+        self._set("browsers_path", str(value or ""))

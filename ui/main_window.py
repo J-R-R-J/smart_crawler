@@ -26,6 +26,7 @@ from .left_panel   import LeftPanel
 from .center_panel import CenterPanel
 from .right_panel  import RightPanel
 from .keyword_dialog import KeywordDialog
+from .settings_dialog import SettingsDialog
 
 
 def qss_candidates() -> list:
@@ -62,20 +63,31 @@ class MainWindow(QMainWindow):
 
         self.signals = get_signals()
         self.prefs   = UserPrefs()
+        # 引擎文件位置（外挂包 / 浏览器）要先于任何一次「引擎可用性」判断生效
+        self._apply_engine_paths()
 
         # ---------- 初始化 core ----------
+        # 反检测强化：总开关关掉时六个子项全部按「关」处理。
+        # 这里先算一次，Browser 构造时就要用到（拦截器在页面加载前装好）。
+        ad = self._antibot_flags()
         self.browser = Browser(
             profile_name=self.prefs.last_profile or DEFAULT_PROFILE,
             popup_strategy=self.prefs.popup_strategy,
             stealth_enabled=self.prefs.stealth_enabled,
             max_download_mb=self.prefs.max_download_mb,
             allowed_download_exts=self.prefs.download_exts,
+            block_trackers=ad["block_trackers"],
+            auto_headers=ad["auto_headers"],
+            hide_canvas=ad["hide_canvas"],
+            block_webrtc=ad["block_webrtc"],
         )
         self.cookie_manager = CookieManager(self.browser.profile, self)
         # Profile=cookie 集：绑定当前 profile 名，并载入其已保存的 cookie
         self.cookie_manager.set_profile_name(self.browser.profile_name)
         self.cookie_manager.load_from_profile(self.browser.profile_name)
         self.crawler = Crawler(self.browser, self)
+        self.crawler.auto_cloudflare = ad["auto_cloudflare"]
+        self._apply_antibot_runtime(ad)
 
         # ---------- UI ----------
         self._build_ui()
@@ -97,7 +109,88 @@ class MainWindow(QMainWindow):
         log_info(f"SmartCrawler v{APP_VERSION} 已启动 · Profile='{self.browser.profile_name}' · "
                  f"弹窗策略='{self.prefs.popup_strategy}' · "
                  f"反爬伪装={'开' if self.browser.stealth_enabled else '关'}")
+        log_info(f"[antibot] 反检测强化："
+                 f"{'开' if ad['enabled'] else '关'}（"
+                 f"追踪器拦截={'开' if ad['block_trackers'] else '关'}，"
+                 f"真实请求头={'开' if ad['auto_headers'] else '关'}，"
+                 f"TLS指纹={'开' if ad['tls_spoof'] else '关'}，"
+                 f"Canvas={'开' if ad['hide_canvas'] else '关'}，"
+                 f"WebRTC={'开' if ad['block_webrtc'] else '关'}，"
+                 f"CF自动绕过={'开' if ad['auto_cloudflare'] else '关'}）")
         self.signals.log.emit("INFO", "就绪。输入网址并加载，选择抓取格式，然后开始抓取。")
+
+    # ==================================================================
+    # 反检测强化
+    # ==================================================================
+    def _antibot_flags(self) -> dict:
+        """把「总开关 + 逐项偏好」合成实际生效的一组开关。
+
+        总开关的语义是「一键全关/全开」：关掉它之后六个子项一律按关处理，
+        但各自的勾选状态仍留在配置里，重新打开就回到原组合。
+        """
+        p = self.prefs
+        master = bool(getattr(p, "antibot_enabled", True))
+        on = (lambda v: bool(v) and master)
+        return {
+            "enabled": master,
+            "block_trackers": on(getattr(p, "block_trackers", True)),
+            "block_ad_creatives": on(getattr(p, "block_ad_creatives", False)),
+            "auto_headers": on(getattr(p, "auto_headers", True)),
+            "tls_spoof": on(getattr(p, "tls_spoof", True)),
+            "hide_canvas": on(getattr(p, "hide_canvas", True)),
+            "block_webrtc": on(getattr(p, "block_webrtc", True)),
+            "auto_cloudflare": on(getattr(p, "auto_cloudflare", True)),
+        }
+
+    def _apply_antibot_runtime(self, flags: dict = None) -> dict:
+        """把反检测开关同步到浏览器、抓取状态机与 Scrapling 融合层。"""
+        from core import scrapling_engine as se
+
+        ad = flags if flags is not None else self._antibot_flags()
+        try:
+            self.browser.block_trackers = ad["block_trackers"]
+            self.browser.tracker_policy.block_creatives = ad["block_ad_creatives"]
+            self.browser.auto_headers = ad["auto_headers"]
+            self.browser.hide_canvas = ad["hide_canvas"]
+            self.browser.block_webrtc = ad["block_webrtc"]
+            self.crawler.auto_cloudflare = ad["auto_cloudflare"]
+        except Exception as exc:                       # pragma: no cover
+            log_warn(f"[antibot] 同步到浏览器失败：{exc}")
+        # 非浏览器引擎（HTTP / 隐身 / 动态）走自己的一套：请求头与 TLS 档位
+        try:
+            se.set_runtime_options(auto_headers=ad["auto_headers"],
+                                   tls_spoof=ad["tls_spoof"])
+        except Exception as exc:                       # pragma: no cover
+            log_warn(f"[antibot] 同步到 Scrapling 层失败：{exc}")
+        return ad
+
+    def _on_antibot_settings(self):
+        """打开「设置」窗口（反检测分组在它的第一组里）。"""
+        self._on_settings()
+
+    # ==================================================================
+    # 引擎文件位置（外挂依赖目录 / 浏览器目录）
+    # ==================================================================
+    def _apply_engine_paths(self) -> dict:
+        """把界面上的自定义目录同步到 Scrapling 融合层。
+
+        为什么要在启动时做一次：用户上次在设置窗口里把包/浏览器指到了别的盘，
+        重启后必须仍然生效 —— 否则「设置里明明填了，重启又变回未安装」。
+        """
+        from core import scrapling_engine as se
+
+        try:
+            custom = se.set_custom_paths(
+                site_packages=getattr(self.prefs, "site_packages_path", "") or "",
+                browsers=getattr(self.prefs, "browsers_path", "") or "")
+        except Exception as exc:                       # pragma: no cover
+            log_warn(f"[engine] 应用自定义目录失败：{exc}")
+            return {}
+        if any(custom.values()):
+            log_info("[engine] 自定义目录已生效：外挂包=%s 浏览器=%s"
+                     % (custom.get("site_packages") or "（默认）",
+                        custom.get("browsers") or "（默认）"))
+        return custom
 
     # ==================================================================
     # 窗口尺寸
@@ -183,6 +276,7 @@ class MainWindow(QMainWindow):
         self.top_bar.reload_clicked.connect(self.browser.reload)
         self.top_bar.pick_toggled.connect(self._on_pick_toggled)
         self.top_bar.popup_strategy_changed.connect(self._on_popup_strategy)
+        self.top_bar.settings_clicked.connect(self._on_settings)
 
         # --- Banner ---
         self.banner.done_clicked.connect(self.crawler.on_human_done)
@@ -195,6 +289,7 @@ class MainWindow(QMainWindow):
         self.left_panel.keywords_clicked.connect(self._on_keywords)
         self.left_panel.settings_changed.connect(self._on_run_settings)
         self.left_panel.console_toggled.connect(self._on_console_toggled)
+        self.left_panel.antibot_settings_clicked.connect(self._on_settings)
 
         # --- Browser → URL ---
         self.browser.url_changed.connect(self.top_bar.set_url)
@@ -283,8 +378,25 @@ class MainWindow(QMainWindow):
             self.signals.log.emit("INFO", "检测关键词已更新，立即生效。")
             log_info("[ui] 检测关键词已更新")
 
+    def _on_settings(self):
+        """打开「设置」窗口：反检测强化 + 依赖与浏览器增强包指引。
+
+        免安装版 zip 里没有 README，所以把安装指引放进界面；
+        关掉后顺手刷新左侧提示 —— 用户可能刚照着把浏览器解压进去了，
+        没必要为此重启程序（browsers_ready() 每次都重新探测）。
+        窗口里改过反检测开关的话，这里再同步一次到运行时。
+        """
+        dlg = SettingsDialog(self, prefs=self.prefs,
+                             apply_cb=self._apply_antibot_runtime)
+        dlg.exec()
+        try:
+            self.left_panel.refresh_engine_hint()
+        except Exception as exc:                     # pragma: no cover
+            log_warn("[ui] 关闭设置后刷新引擎提示失败：%s" % exc)
+        self._apply_antibot_runtime()
+
     def _on_run_settings(self):
-        """反爬伪装 / 下载上限 / 下载格式变化：同步到浏览器并持久化。"""
+        """反爬伪装 / 反检测 / 下载上限 / 下载格式变化：同步并持久化。"""
         stealth = self.left_panel.stealth_enabled()
         limit = self.left_panel.max_download_mb()
         exts = self.left_panel.download_exts()
@@ -292,16 +404,20 @@ class MainWindow(QMainWindow):
         self.prefs.stealth_enabled = stealth
         self.prefs.max_download_mb = limit
         self.prefs.download_exts = exts
+        self.prefs.antibot_enabled = self.left_panel.antibot_enabled()
+        self.prefs.download_preset = self.left_panel.download_preset()
 
         self.browser.stealth_enabled = stealth
         self.browser.max_download_mb = limit
         self.browser.allowed_download_exts = exts
+        ad = self._apply_antibot_runtime()
 
         size_txt = f"{limit} MB" if limit else "不限大小"
         ext_txt = exts if exts else "不限格式"
         self.signals.log.emit(
             "INFO",
             f"运行设置已更新：反爬伪装 {'开' if stealth else '关'}，"
+            f"反检测强化 {'开' if ad['enabled'] else '关'}，"
             f"下载上限 {size_txt}，下载格式 {ext_txt}")
 
     # ------------------------------------------------------------------

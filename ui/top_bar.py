@@ -16,6 +16,7 @@ class TopBar(QWidget):
     reload_clicked = Signal()
     pick_toggled   = Signal(bool)     # 是否开启拾取
     popup_strategy_changed = Signal(str)  # notify/close/remove
+    settings_clicked = Signal()       # 左上角「设置」
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -26,6 +27,14 @@ class TopBar(QWidget):
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)
+
+        # 「设置」放在最左边 = 窗口左上角。内容主要是依赖与浏览器增强包的
+        # 安装指引（免安装版不携带 README，只能把指引放进界面）。
+        self.btn_settings = QPushButton("设置")
+        self.btn_settings.setFixedWidth(52)
+        self.btn_settings.setToolTip(
+            "依赖与「浏览器增强包」安装指引：\n"
+            "怎么装 Scrapling、怎么放 Playwright 浏览器、当前状态如何")
 
         self.btn_back    = QPushButton("后退"); self.btn_back.setFixedWidth(52)
         self.btn_fwd     = QPushButton("前进"); self.btn_fwd.setFixedWidth(52)
@@ -59,6 +68,7 @@ class TopBar(QWidget):
         self.popup_combo.setToolTip("页面弹窗处理策略")
 
         # 组装
+        lay.addWidget(self.btn_settings)
         lay.addWidget(self.btn_back)
         lay.addWidget(self.btn_fwd)
         lay.addWidget(self.btn_reload)
@@ -69,6 +79,7 @@ class TopBar(QWidget):
         lay.addWidget(self.popup_combo)
 
         # 信号
+        self.btn_settings.clicked.connect(self.settings_clicked)
         self.btn_back.clicked.connect(self.back_clicked)
         self.btn_fwd.clicked.connect(self.forward_clicked)
         self.btn_reload.clicked.connect(self.reload_clicked)

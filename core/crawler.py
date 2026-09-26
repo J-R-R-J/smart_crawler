@@ -20,6 +20,7 @@ from config.js_scripts import (
     CAPTCHA_PROBE_JS, GET_HTML_JS, GET_TEXT_JS, GET_TITLE_JS,
     LOGIN_PROBE_JS, SCROLL_JS,
 )
+from core import antibot
 from core.detector import Detector
 from core.extractor import Extractor
 from core.pager import Pager
@@ -49,11 +50,13 @@ class _EngineFetcher(QThread):
 
     done = Signal(object)
 
-    def __init__(self, engine: str, url: str, timeout: float, parent=None):
+    def __init__(self, engine: str, url: str, timeout: float,
+                 solve_cloudflare: bool = True, parent=None):
         super().__init__(parent)
         self._engine = engine
         self._url = url
         self._timeout = timeout
+        self._solve_cf = bool(solve_cloudflare)
 
     def run(self) -> None:
         try:
@@ -63,7 +66,7 @@ class _EngineFetcher(QThread):
                 # 过 Cloudflare 需要更充裕的超时（单位：秒，引擎内部换算成毫秒）
                 result = scrapling_engine.stealth_get(
                     self._url, timeout=max(self._timeout, 90.0),
-                    solve_cloudflare=True)
+                    solve_cloudflare=self._solve_cf)
             elif self._engine == "dynamic":
                 result = scrapling_engine.dynamic_get(
                     self._url, timeout=max(self._timeout, 90.0))
@@ -96,6 +99,13 @@ class Crawler(QObject):
         self._poll_timer = None
         self._skip_detection = False   # 用户判定误判后，本任务内不再因验证暂停
         self._fetcher = None           # 非浏览器引擎的后台抓取线程（保活引用）
+        #: 当前页面是**外部引擎取回的 HTML**灌进来的（不是浏览器自己导航的）。
+        #: 这类页面的 loadFinished(False) 不能当致命错误 —— 见 _on_load_finished。
+        #: 用一个**时间窗**而不是布尔标记：页面自行跳转后往往还会再来一次
+        #: loadFinished，只用布尔量会在第二次又把它当致命错误。
+        self._injected_until = 0.0
+        self._auto_cloudflare = True   # 识别到 CF JS 挑战时自动换隐身引擎重试
+        self._cf_retry_done = False    # 每个任务只自动绕过一次，避免死循环
 
         # ---- 组件组装 ----
         self.detector = Detector(self)
@@ -129,6 +139,8 @@ class Crawler(QObject):
         self._awaiting_load = False
         self._poll_timer = None
         self._skip_detection = False   # 新任务重新启用检测
+        self._cf_retry_done = False    # 允许本任务自动绕过一次 CF
+        self._injected_until = 0.0     # 新任务是浏览器自己导航，不走宽容分支
 
         self._signals.task_started.emit()
         self._signals.log.emit("INFO", f"任务启动：{task.url}")
@@ -185,7 +197,9 @@ class Crawler(QObject):
         log_info(f"[crawler] {msg}")
         self._signals.log.emit("INFO", msg)
 
-        fetcher = _EngineFetcher(engine, url, timeout, self)
+        fetcher = _EngineFetcher(engine, url, timeout,
+                                 solve_cloudflare=self._auto_cloudflare,
+                                 parent=self)
         fetcher.done.connect(self._on_engine_fetched)
         self._fetcher = fetcher          # 保活：防止线程对象被提前回收
         fetcher.start()
@@ -209,10 +223,24 @@ class Crawler(QObject):
         log_info(f"[crawler] {msg}")
         self._signals.log.emit("INFO", msg)
 
+        cf = (getattr(result, "extra", None) or {}).get("cloudflare")
+        if cf:
+            log_info(f"[crawler] {cf.get('reason', '')}")
+
         self._awaiting_load = True
+        self._injected_until = time.time() + 30.0
         if not self._browser.load_html(result.html, base):
             log_warn("[crawler] HTML 载入失败，任务终止")
             self._finish()
+
+    @property
+    def auto_cloudflare(self) -> bool:
+        """识别到可自动绕过的 Cloudflare 挑战时，是否自动换隐身引擎重试。"""
+        return self._auto_cloudflare
+
+    @auto_cloudflare.setter
+    def auto_cloudflare(self, value) -> None:
+        self._auto_cloudflare = bool(value)
 
     def stop_task(self) -> None:
         if self._state in ("IDLE", "STOPPED"):
@@ -283,14 +311,26 @@ class Crawler(QObject):
         if self._state not in _RUNNING or self._cancel:
             return
         if not ok:
-            log_warn("[crawler] 页面加载失败，任务终止")
-            self._finish()
-            return
+            # 外部引擎灌进来的 HTML（HTTP / 隐身 / 动态引擎）**不能**因为
+            # loadFinished(False) 就终止任务：实测抖音这类页面，注入之后页面
+            # 自己的脚本会立刻跳转（校验/规范化地址），Qt 就把我们发起的那次
+            # 加载判成 aborted(False)。可内容早就在 DOM 里了 ——
+            # 原来的写法在这里直接"任务终止、共 0 条"，用户看到的现象就是
+            # 「隐身 / 动态引擎用不了」。
+            if time.time() < self._injected_until:
+                msg = ("注入页面的加载被页面脚本中断（多为站点自行跳转），"
+                       "继续按已取回的 HTML 提取")
+                log_warn(f"[crawler] {msg}")
+                self._signals.log.emit("WARN", msg)
+            else:
+                log_warn("[crawler] 页面加载失败，任务终止")
+                self._finish()
+                return
         self._set_state("WAIT_LOAD")
         QTimer.singleShot(600, self._after_load)
 
     def _after_load(self) -> None:
-        """步骤 1（弹窗）+ 步骤 2（detector 分类）。"""
+        """步骤 1（弹窗）+ 步骤 2（detector 分类）+ Cloudflare 自动绕过。"""
         if self._cancel or self._state not in _RUNNING:
             return
         self.popup_handler.set_strategy(self._browser.popup_strategy)
@@ -304,17 +344,69 @@ class Crawler(QObject):
         html = self._get_html()
         title = self._get_title()
         text = self._get_text()
+        url = self._browser.url()
+
+        # ---- Cloudflare：先判断能不能自动过 ----
+        # 顺序很重要：能自动过就别打扰用户。以前是一律停下来等人，
+        # 而实测页面上「根本没有挑战」（脚本字样误命中）也照样拦。
+        cf = antibot.is_cloudflare_challenge(html, title, url)
+        if cf.get("challenge") and self._try_cloudflare_bypass(cf):
+            return
+
         level, reason = self.detector.classify(
-            html, title, self._browser.url(), text,
+            html, title, url, text,
             captcha_forms=self._probe_captcha(),
             login_form=self._probe_login(),
         )
+        if self.detector.last_note:
+            # 「源码命中但可见区域没有」这类观察只记日志，不拦任务
+            log_info(f"[crawler] {self.detector.last_note}")
         self.detector.detected.emit(level, reason)
 
         if level in _BLOCKING:
+            if cf.get("challenge"):
+                reason = f"{reason}｜{antibot.cloudflare_hint(cf.get('kind', ''))}"
             self._pause_for_human(level, reason)
         else:
             self._continue_after_load()
+
+    # ------------------------------------------------------------------
+    # Cloudflare 自动绕过
+    # ------------------------------------------------------------------
+    def _try_cloudflare_bypass(self, cf: dict) -> bool:
+        """识别到**可自动绕过**的 CF JS 挑战时，换隐身引擎重试一次。
+
+        返回 True 表示已经发起重试（调用方必须立刻返回，不要再走检测流程）。
+
+        为什么要分类型：``cf["kind"] == "js"`` 是等几秒自动跳转的非交互挑战，
+        隐身引擎基本都能过；``turnstile`` / ``block`` 则必须人工或被直接拒绝，
+        重试只是浪费时间，所以照旧停下来等人。
+        """
+        if not self._auto_cloudflare or not cf.get("auto") or self._cf_retry_done:
+            return False
+        engine = (getattr(self._task, "engine", "") or "browser").strip().lower()
+        if engine == "stealth":
+            # 已经在用隐身引擎了，再调一次不会有不同结果
+            return False
+
+        reason = cf.get("reason", "Cloudflare 挑战")
+        if not scrapling_engine.probe():
+            log_warn(f"[crawler] {reason}，但未安装 Scrapling，无法自动绕过")
+            self._signals.log.emit(
+                "WARN", f"{reason}；装好 Scrapling + 浏览器增强包后本程序会自动绕过")
+            return False
+        if not scrapling_engine.browsers_ready():
+            log_warn(f"[crawler] {reason}，但隐身引擎缺少浏览器，无法自动绕过")
+            self._signals.log.emit(
+                "WARN", f"{reason}；缺浏览器，请按左侧「复制安装命令」装浏览器增强包")
+            return False
+
+        self._cf_retry_done = True
+        msg = f"{reason} → 自动改用隐身引擎重试一次"
+        log_info(f"[crawler] {msg}")
+        self._signals.log.emit("INFO", msg)
+        self._start_engine_fetch(self._task.url or self._browser.url(), "stealth")
+        return True
 
     def _pause_for_human(self, level: str, reason: str) -> None:
         self._set_state("HUMAN_WAIT")

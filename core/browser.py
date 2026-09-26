@@ -11,6 +11,7 @@
 """
 
 import os
+import random
 import re
 import shutil
 
@@ -19,7 +20,9 @@ from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineScript
 
 from config.constants import DATA_DIR, DOWNLOAD_DIR, ENGINE_DIR, PROFILE_DIR
-from config.js_scripts import STEALTH_JS
+from config.js_scripts import build_stealth_js
+from core import antibot
+from core import headers as _headers
 from core.signals import get_signals
 from utils.js_runner import JsRunner
 from utils.logger import log_info, log_warn
@@ -72,11 +75,13 @@ QWEBCHANNEL_LOADER_JS = (
 # 会让其他所有伪装措施失效。
 # 如果你希望在被采集站点上保持可识别性（更透明的做法），
 # 可以设置环境变量 SMARTCRAWLER_UA_SUFFIX 让它追加到 UA 末尾。
-_UA_SUFFIX = os.environ.get("SMARTCRAWLER_UA_SUFFIX", "").strip()
-_DESKTOP_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-) + (f" {_UA_SUFFIX}" if _UA_SUFFIX else "")
+#
+# **版本号不再写死**（曾经写死 Chrome/124，而引擎实际是 Chromium 130，
+# 站点把 UA 与 Client Hints 一比就能看出是假的）。现在统一从
+# core.headers 取，那里会去问运行中的 QtWebEngine 真实版本。
+def desktop_ua() -> str:
+    """当前应使用的桌面 UA（版本号与引擎 / Client Hints 同源）。"""
+    return _headers.desktop_ua()
 
 # Profile 目录名仅允许：字母、数字、下划线、连字符
 _PROFILE_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -174,7 +179,9 @@ class Browser(QObject):
 
     def __init__(self, profile_name: str = "default", popup_strategy: str = "close",
                  stealth_enabled: bool = True, max_download_mb: int = 50,
-                 allowed_download_exts: str = ""):
+                 allowed_download_exts: str = "",
+                 block_trackers: bool = True, auto_headers: bool = True,
+                 hide_canvas: bool = True, block_webrtc: bool = True):
         super().__init__()
         self._profile_name = profile_name
         self._popup_strategy = popup_strategy
@@ -184,7 +191,24 @@ class Browser(QObject):
         self._downloads = []      # 保活：进行中的下载对象
         self._old_refs = []       # 保留旧 page/profile/channel/bridge 引用直至销毁
 
+        # Canvas 噪声种子：**每个进程固定一个**。
+        # 同一次运行里同一个 canvas 反复读取必须得到同一个结果（确定性），
+        # 换一次运行则整体变化 —— 既不像自动化，也不会成为稳定追踪标识。
+        self._canvas_seed = random.randint(1, 2 ** 30)
+
+        # ---- 反检测强化开关 ----
+        self._hide_canvas = bool(hide_canvas)
+        self._block_webrtc = bool(block_webrtc)
+
         self._profile = self._create_profile()
+
+        # 拦截器必须**在页面加载之前**装好：它同时负责拦第三方追踪器
+        # 与补齐 QtWebEngine 不会发的请求头（Client Hints 等）。
+        self._policy = antibot.TrackerInterceptor(
+            block_trackers=bool(block_trackers), add_headers=bool(auto_headers))
+        self._interceptor = antibot.QtTrackerInterceptor(self._policy)
+        self._install_interceptor()
+
         self._page = CrawlerPage(self._profile, self)
         self._js = JsRunner(self._page)
 
@@ -261,6 +285,81 @@ class Browser(QObject):
             self._install_stealth_script()
         else:
             self._remove_stealth_script()
+
+    # ------------------------------------------------------------------
+    # 反检测强化（网络层拦截器 + 伪装脚本里的三节）
+    # ------------------------------------------------------------------
+    @property
+    def tracker_policy(self):
+        """第三方追踪器拦截策略对象（开关与统计都在它身上）。"""
+        return self._policy
+
+    def tracker_summary(self) -> str:
+        """一行可读的拦截统计（日志 / 界面用）。"""
+        return self._policy.summary()
+
+    @property
+    def block_trackers(self) -> bool:
+        return self._policy.enabled
+
+    @block_trackers.setter
+    def block_trackers(self, value) -> None:
+        self._policy.enabled = bool(value)
+
+    @property
+    def auto_headers(self) -> bool:
+        """是否按请求补齐 Client Hints / Sec-Fetch-* 等真实浏览器请求头。"""
+        return self._policy.add_headers
+
+    @auto_headers.setter
+    def auto_headers(self, value) -> None:
+        self._policy.add_headers = bool(value)
+
+    @property
+    def hide_canvas(self) -> bool:
+        return self._hide_canvas
+
+    @hide_canvas.setter
+    def hide_canvas(self, value) -> None:
+        self._set_stealth_flag("_hide_canvas", value)
+
+    @property
+    def block_webrtc(self) -> bool:
+        return self._block_webrtc
+
+    @block_webrtc.setter
+    def block_webrtc(self, value) -> None:
+        self._set_stealth_flag("_block_webrtc", value)
+
+    def _set_stealth_flag(self, attr: str, value) -> None:
+        """改伪装脚本里的开关：重建脚本并重新注入。
+
+        伪装脚本的开关是**编译进 JS** 的（该脚本在 DocumentCreation 阶段
+        执行，Python 来不及往里塞配置），所以改开关必须重建 + 重新注入。
+        重新注入只对**之后**加载的页面生效，当前页面要刷新一次 ——
+        写在这里，免得以后有人以为改完立刻生效。
+        """
+        old = bool(getattr(self, attr, False))
+        new = bool(value)
+        setattr(self, attr, new)
+        if old == new:
+            return
+        if self._stealth_enabled:
+            self._remove_stealth_script()
+            self._install_stealth_script()
+
+    def anti_detect_state(self) -> dict:
+        """当前反检测配置快照（界面显示 / 自检 / 日志用）。"""
+        return {
+            "stealth": self._stealth_enabled,
+            "block_trackers": self._policy.enabled,
+            "auto_headers": self._policy.add_headers,
+            "hide_canvas": self._hide_canvas,
+            "block_webrtc": self._block_webrtc,
+            "user_agent": self._profile.httpUserAgent(),
+            "accept_language": self._profile.httpAcceptLanguage(),
+            "tls": _headers.tls_profile(),
+        }
 
     @property
     def max_download_mb(self) -> int:
@@ -452,8 +551,46 @@ class Browser(QObject):
         profile.setPersistentStoragePath(storage)
         profile.setPersistentCookiesPolicy(
             QWebEngineProfile.PersistentCookiesPolicy.ForcePersistentCookies)
-        profile.setHttpUserAgent(_DESKTOP_UA)
+
+        # UA 与 Accept-Language 都从 core.headers 取，保证与
+        # sec-ch-ua / navigator.languages 是**同一套口径**。
+        # 以前这里写死 UA、Accept-Language 则完全不管（Qt 默认 en-US），
+        # 而伪装脚本报的是 zh-CN —— 两个值对不上，是最容易被抓的一处。
+        #
+        # 版本号从**这个 Profile 自己的默认 UA** 里读，顺序很关键：
+        # 先读再覆盖。绝不能改用 QWebEngineProfile.defaultProfile() ——
+        # 那会创建第二个 Profile，而单进程渲染模式下第二个 Profile
+        # 会被拒绝并直接 abort（实测启动即崩）。
+        default_ua = profile.httpUserAgent() or ""
+        major = _headers.major_from_ua(default_ua)
+        if major:
+            _headers.set_engine_major(major)
+        ua = _headers.desktop_ua(major or None)
+        profile.setHttpUserAgent(ua)
+        try:
+            profile.setHttpAcceptLanguage(_headers.accept_language())
+        except Exception as e:                             # pragma: no cover
+            log_warn(f"[browser] 设置 Accept-Language 失败：{e}")
+        log_info(f"[browser] 引擎 UA：{default_ua}")
+        log_info(f"[browser] 采用 UA：{ua}"
+                 + ("" if major else "（未能从引擎读出真实版本，用兜底版本号）"))
         return profile
+
+    def _install_interceptor(self) -> None:
+        """装上网络层拦截器（拦追踪器 + 补请求头）。
+
+        注意 QtWebEngine 一个 Profile 只能有一个拦截器，后设置的会**替换**
+        先设置的（不报错），所以这两件事必须共用同一个对象。
+        """
+        try:
+            self._profile.setUrlRequestInterceptor(self._interceptor)
+        except Exception as e:                             # pragma: no cover
+            log_warn(f"[browser] 安装请求拦截器失败：{e}")
+            return
+        if self._policy.enabled or self._policy.add_headers:
+            log_info("[antibot] 请求拦截器已启用："
+                     f"拦截追踪器={'开' if self._policy.enabled else '关'}，"
+                     f"补齐真实请求头={'开' if self._policy.add_headers else '关'}")
 
     def _install_channel_script(self) -> None:
         script = QWebEngineScript()
@@ -474,7 +611,13 @@ class Browser(QObject):
         return None
 
     def _install_stealth_script(self) -> None:
-        """注入反爬特征伪装脚本（DocumentCreation，早于页面脚本）。"""
+        """注入反爬特征伪装脚本（DocumentCreation，早于页面脚本）。
+
+        脚本内容按当前开关生成：Canvas 指纹干扰 / WebRTC 泄露防护 /
+        反广告探测 三节可以单独关掉，而开关是编译进 JS 的（见
+        ``_set_stealth_flag``）。``major`` 传真实 Chromium 版本，
+        用来把 ``navigator.userAgentData`` 与 UA 对齐。
+        """
         try:
             if self._find_script("sc_stealth") is not None:
                 return
@@ -482,9 +625,18 @@ class Browser(QObject):
             script.setName("sc_stealth")
             script.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentCreation)
             script.setWorldId(QWebEngineScript.ScriptWorldId.MainWorld)
-            script.setSourceCode(STEALTH_JS)
+            script.setSourceCode(build_stealth_js(
+                canvas=self._hide_canvas, webrtc=self._block_webrtc,
+                adblock=True, uach=True, major=_headers.chrome_major(),
+                seed=self._canvas_seed))
             self._page.scripts().insert(script)
-            log_info("[stealth] 已启用浏览器特征伪装")
+            flags = [name for name, on in (
+                ("Canvas指纹干扰", self._hide_canvas),
+                ("WebRTC泄露防护", self._block_webrtc),
+                ("反广告探测干扰", True),
+            ) if on]
+            log_info("[stealth] 已启用浏览器特征伪装"
+                     + (f"（{'、'.join(flags)}）" if flags else "（基础项）"))
         except Exception as e:
             log_warn(f"[stealth] 注入失败：{e}")
 
